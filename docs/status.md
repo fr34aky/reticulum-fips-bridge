@@ -1,0 +1,62 @@
+# Status and verification log
+
+## 2026-10-11: both directions verified live
+
+Two real nodes: a home host and a cloud VM, each running FIPS 0.6.0-dev
+(master, rev 7ae9355) with the native API enabled, Reticulum 1.5.7 via
+`rnsd`, and `rnsfips` 0.1.0. The two FIPS nodes peer over the public FIPS
+mesh.
+
+### Phase 1: Reticulum over FIPS
+
+- `FIPSInterface` on both rnsd instances, configured with each other's npub.
+- `rnstatus` on both sides shows `FIPSPeerInterface[FIPS/npub1...]` up at
+  MTU 1169 after the HELLO exchange.
+- `rnpath` to an `rncp` listener on the VM resolves to 1 hop via the FIPS
+  peer interface.
+- A 300 KB `rncp` transfer completes at about 1.3 Mbps; the SHA-256 of the
+  received file matches the sender's.
+
+### Phase 2: FIPS over Reticulum
+
+- A second, isolated FIPS daemon on the host (loopback UDP only, no peers, no
+  Nostr or LAN discovery) runs `rnsfips tunnel` against its control socket.
+  Its only path to anything is the tunnel.
+- The VM runs `rnsfips tunnel` against its normal FIPS daemon with the host
+  tunnel's destination hash in `peers`.
+- After the Reticulum link comes up, both tunnels exchange HELLOs and tell
+  their FIPS daemons to peer over the loopback shim. The isolated daemon shows
+  the VM as a connected peer at `127.0.0.1:<shim port>`, takes spanning-tree
+  depth 2 and estimates the mesh at about 900 nodes.
+- `fipsctl probe` from the isolated daemon to a third mesh node (the host's
+  main FIPS daemon) succeeds: bloom hit, discovery answered on the first
+  attempt, Noise XK session established, 132 ms round trip, observed path MTU
+  1280 bytes. The Reticulum link's MDU was about 1071 bytes, so the bridge's
+  fragmentation carried full-size FIPS frames in live traffic.
+- In this test the Reticulum link between the two rnsd instances itself ran
+  over the Phase 1 FIPS interface (FIPS over Reticulum over FIPS). The
+  isolated daemon never saw anything but a loopback UDP peer.
+
+### Deployment notes learned
+
+- `rnsd` must run in the same Python environment as `rnsfips`; Reticulum
+  imports the interface inside its own interpreter. With pipx: `pipx install
+  rnsfips` then `pipx inject rnsfips rns --include-apps`, and do not keep a
+  separate `rns` pipx venv on PATH. `rnsfips install-interface` now warns when
+  the `rnsd` on PATH cannot import `rnsfips`.
+- `~/.reticulum/config` is created by the first `rnsd` run (or
+  `rnsd --exampleconfig`); set `enable_transport = yes` and add one `[[FIPS]]`
+  block. Duplicate section names are a parse error.
+- The tunnel config is INI at `~/.config/rnsfips/tunnel.conf`.
+- A FIPS node will not dial a peer it already holds live, so a tunnel between
+  two nodes that already peer directly sits idle. Use the tunnel for nodes
+  that have no other way in.
+- `rnsfips install-units` writes systemd user units; enable lingering so they
+  outlive the login session. Disable the tunnel unit on hosts with no
+  `tunnel.conf`.
+- Reticulum ignores a re-announce emitted in the same second as the previous
+  one, and its logs are block-buffered when stdout is a file
+  (`PYTHONUNBUFFERED=1`).
+- FIPS builds before commit 55fb970 cannot complete discovery for a native
+  flow to a multi-hop peer without the key in their identity cache; the
+  interface's `fips_dns` priming covers that and is harmless on master.
