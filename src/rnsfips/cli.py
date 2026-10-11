@@ -88,6 +88,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+Environment=PYTHONUNBUFFERED=1
 ExecStart={rnsd} -v
 Restart=on-failure
 RestartSec=5
