@@ -64,7 +64,8 @@ mesh.
   about 50 ms, link RTT 46 to 49 ms, link MTU 1169 (MDU 1087), unchanged from
   the direct-peer case apart from a few milliseconds.
 - A 300 KB `rncp` transfer from the home node to a listener on the VM over
-  this path completed at 2.18 Mbps (the direct-peer Phase 1 run did 1.3 Mbps;
+  this path completed at 2.18 Mbps with the SHA-256 verified on the VM (the
+  direct-peer Phase 1 run did 1.3 Mbps;
   the public mesh hop to the third machine is simply a better route than the
   old direct UDP peering was).
 - Pitfall found on the way: a `[[FIPS]]` block whose `peers` line is
