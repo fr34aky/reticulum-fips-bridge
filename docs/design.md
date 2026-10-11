@@ -134,6 +134,62 @@ FIPS's control plane assumes IP-class links. Over LoRa-class Reticulum paths,
 set `node.mmp.mode: minimal` and raise `node.link_dead_timeout_secs` on the FIPS
 side, and expect it to be slow. This mode is experimental.
 
+## Routing loops
+
+Each stack is loop-free on its own, and the bridge adds no forwarding
+decision of its own, so no packet can circle. The reasoning, checked against
+the sources:
+
+**Reticulum.** Frames carry a hop counter and are rejected at 128 hops; every
+transport node keeps a hash of recently seen packets and drops duplicates;
+data is forwarded to a single next hop from the path table; an announce is
+retransmitted at most once and that retransmission is suppressed as soon as a
+rebroadcast is heard. A Reticulum frame crossing the FIPS hop is just a frame
+on one more interface, subject to all of the above.
+
+**FIPS.** Forwarding requires strict progress in tree coordinates (`find_next_hop`
+only hands a datagram to a peer that is closer to the destination), session
+datagrams carry a TTL of 64, and lookups are deduplicated. A FIPS frame crossing
+the Reticulum hop is one more link to one peer, subject to the same rules.
+
+**Reticulum over FIPS.** FIPS is a pure link layer here: each datagram goes to
+one named npub and FIPS never forwards Reticulum frames, so it cannot add a
+Reticulum hop. If both sides dial each other and the dedupe ever failed, the
+result would be two parallel peer interfaces to the same node, which Reticulum
+treats as two paths; the stale one times out. Not a loop.
+
+**FIPS over Reticulum.** The tunnel is one more FIPS link; tree routing and the
+TTL still govern it. Link packets are neither acknowledged nor retransmitted,
+so there is no retransmission feedback between the layers either.
+
+**The layered case.** Running FIPS over Reticulum over FIPS is safe as long as
+one FIPS identity is never both carrying and carried by the same Reticulum
+link. Two things enforce it. A FIPS node will not dial a peer it already holds
+live (the control socket's `connect` on a live peer reports "peer live, not
+dialled"), so a tunnel between two nodes that already peer directly sits idle
+rather than forming a second, circular link. And in the live test the tunnelled
+daemon was a separate FIPS identity from the daemon carrying the Reticulum
+link, so no node ever had itself as a peer. This is why the tunnel unit is
+disabled on a host whose main FIPS daemon already peers with the far side.
+
+**Bridge announces.** The `rnsfips.bridge` discovery announce is an ordinary
+Reticulum announce and crosses the FIPS hop like any other; Reticulum's
+rebroadcast suppression and per-destination rate limits apply, and the
+interface re-announces at most once per 30 s on peer events. It cannot storm.
+
+**What can still happen** is not looping but churn:
+
+- Path flapping when a site has two 1-hop Reticulum paths to the same peer
+  (for example a TCP interface and the FIPS interface): re-announces may switch
+  between them. Bias with the interface `gravity` option.
+- Announce volume when two large Reticulum networks are joined over FIPS. It is
+  bounded by `announce_cap` and the per-destination rate target; use
+  `mode = gateway` or `boundary` instead of `full` for big joins.
+- Overhead amplification if the bridge is chained: a 1280-byte FIPS frame
+  becomes two or three Reticulum packets, each inside a 1170-byte FIPS
+  datagram, roughly three times the bytes on the inner path. A cost, not a
+  loop.
+
 ## Security notes
 
 * The FIPS native API socket is the authorization boundary: any process that

@@ -18,7 +18,8 @@ FIPS code is modified.
 
 See [docs/comparison.md](docs/comparison.md) for how the two stacks compare and
 why the bridge sits where it does, [docs/design.md](docs/design.md) for the
-wire envelope, MTU handling and lifecycle details, and
+wire envelope, MTU handling, lifecycle details and why the bridge cannot
+create routing loops, and
 [docs/status.md](docs/status.md) for the live verification log.
 
 ## Status
