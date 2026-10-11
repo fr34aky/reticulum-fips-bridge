@@ -127,7 +127,8 @@ The tunnel exposes a JSON-line control socket
 with `status`, `announce`, `add_peer` and `remove_peer`, used by `rnsfips
 status` and `rnsfips tunnel-ctl`. Inbound links must identify themselves
 (`Link.identify`) and are admitted by the `allow` list before their HELLO is
-processed.
+processed and before the responder sends its own HELLO, so a refused
+initiator never sees the tunnel as up.
 
 FIPS's control plane assumes IP-class links. Over LoRa-class Reticulum paths,
 set `node.mmp.mode: minimal` and raise `node.link_dead_timeout_secs` on the FIPS

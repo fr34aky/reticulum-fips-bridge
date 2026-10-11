@@ -141,7 +141,11 @@ def test_inbound_link_refused_when_not_allowed(rig):
     tb = start_tunnel(b, rig["ctl_b"], rig["udp_b"], allow="0" * 32)
     start_tunnel(a, rig["ctl_a"], rig["udp_a"], peers=tb["dest"])
     import time
-    time.sleep(12)
-    assert not any(p["up"] for p in a.cmd("tunnel_status")["peers"])
-    assert not any(p["up"] for p in b.cmd("tunnel_status")["peers"])
+    # Sample repeatedly: a refused initiator must never be told the tunnel is up,
+    # and neither side may ask its FIPS daemon to dial.
+    for _ in range(12):
+        time.sleep(1)
+        assert not any(p["up"] for p in a.cmd("tunnel_status")["peers"])
+        assert not any(p["up"] for p in b.cmd("tunnel_status")["peers"])
+    assert not rig["ctl_a"].connects()
     assert not rig["ctl_b"].connects()

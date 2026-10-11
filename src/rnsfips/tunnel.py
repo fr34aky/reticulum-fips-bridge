@@ -113,7 +113,7 @@ class Peer:
         self.fragmenter = env.Fragmenter()
         self.reassembler = env.Reassembler(timeout=tunnel.config.frag_timeout)
         self.pending_hello: bytes | None = None
-        self.identified = not initiator and tunnel.config.allow_any
+        self.identified = False
         self.last_connect = 0.0
         self.rx_frames = 0
         self.tx_frames = 0
@@ -326,7 +326,9 @@ class Tunnel:
         link.set_link_closed_callback(lambda l: self._on_closed(peer))
         link.set_remote_identified_callback(lambda l, identity: self._on_identified(peer, identity))
         RNS.log(f"tunnel: inbound link {RNS.prettyhexrep(link.link_id)}; awaiting identification", RNS.LOG_DEBUG)
-        peer.send_hello()
+        # No HELLO yet: the initiator is admitted only after it identifies, and a
+        # HELLO sent before that would make a refused initiator believe the tunnel
+        # is up and tell its FIPS daemon to dial.
 
     def _on_identified(self, peer: Peer, identity: RNS.Identity):
         dest_hash = RNS.Destination.hash(identity, APP_NAME, ASPECT)
@@ -337,6 +339,7 @@ class Tunnel:
             peer.close()
             return
         peer.identified = True
+        peer.send_hello()
         if peer.pending_hello is not None:
             hello, peer.pending_hello = peer.pending_hello, None
             peer._on_hello(hello)

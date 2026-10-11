@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2 (2026-10-11)
+
+- Tunnel: the responder sends its HELLO only after the initiator has
+  identified and been admitted. Before, a refused initiator briefly saw the
+  tunnel as up and told its FIPS daemon to dial, then flapped on every retry.
+
 ## 0.1.1 (2026-10-11)
 
 - `rnsfips tunnel` waits for rnsd's shared instance and requires it. A tunnel
