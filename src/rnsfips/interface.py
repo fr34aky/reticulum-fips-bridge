@@ -135,6 +135,7 @@ class FIPSInterface(Interface):
         self.auto_peer = _as_bool(c.get("auto_peer"), False)
         self.discovered: dict[str, dict] = {}   # npub -> {port, seen, via, tid}
         self.dynamic_peers: dict[str, int] = {}  # discovered npubs we dial (auto_peer)
+        self._refused: dict[str, float] = {}     # npub -> last time we logged a refusal
         self._bridge_identity = None
         self._bridge_destination = None
         self._last_announce = 0.0
@@ -517,7 +518,13 @@ class FIPSInterface(Interface):
             RNS.log(f"{self} bad arrival on listener: {e}", RNS.LOG_DEBUG)
             return
         if not self._allowed(flow.peer):
-            RNS.log(f"{self} refusing flow from unlisted peer {flow.peer[:16]}…", RNS.LOG_DEBUG)
+            # Visible at the default level, once per peer per 10 minutes: a silent
+            # refusal looks exactly like a broken path from the other side.
+            last = self._refused.get(flow.peer, 0.0)
+            if time.time() - last > 600:
+                self._refused[flow.peer] = time.time()
+                RNS.log(f"{self} refusing flow from {flow.peer}: not in peers/allow and accept_unknown is off",
+                        RNS.LOG_WARNING)
             flow.close()
             return
         flow.setblocking(False)
