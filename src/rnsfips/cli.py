@@ -88,8 +88,9 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Environment=PYTHONUNBUFFERED=1
-ExecStart={rnsd} -v
+# Launched through the interpreter with -u: pipx launchers run python -E, which
+# ignores PYTHONUNBUFFERED, and buffered logs reach the journal only at exit.
+ExecStart={python} -u {rnsd} -v
 Restart=on-failure
 RestartSec=5
 
@@ -108,7 +109,7 @@ Environment=PYTHONUNBUFFERED=1
 # Wait for the rnsd shared instance; a tunnel started earlier would become
 # its own Reticulum instance instead of a client of rnsd.
 ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do {rnstatus} >/dev/null 2>&1 && exit 0; sleep 1; done; echo "rnsd shared instance not reachable" >&2; exit 1'
-ExecStart={rnsfips} tunnel --config {config} -v
+ExecStart={python} -u {rnsfips} tunnel --config {config} -v
 Restart=on-failure
 RestartSec=10
 
@@ -129,10 +130,11 @@ def _sibling(name: str) -> str:
     return found
 
 
-def render_units(rnsd: str, rnstatus: str, rnsfips: str, config: str) -> dict:
+def render_units(rnsd: str, rnstatus: str, rnsfips: str, config: str, python: str | None = None) -> dict:
+    python = python or sys.executable
     return {
-        "rnsd.service": RNSD_UNIT.format(rnsd=rnsd),
-        "rnsfips-tunnel.service": TUNNEL_UNIT.format(rnstatus=rnstatus, rnsfips=rnsfips, config=config),
+        "rnsd.service": RNSD_UNIT.format(rnsd=rnsd, python=python),
+        "rnsfips-tunnel.service": TUNNEL_UNIT.format(rnstatus=rnstatus, rnsfips=rnsfips, config=config, python=python),
     }
 
 

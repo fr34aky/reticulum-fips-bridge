@@ -58,7 +58,11 @@ def write_config(configdir: str, fips_socket: str | None, listen_port: int, peer
         lines.append(f"    network_name = {ifac[0]}")
         lines.append(f"    passphrase = {ifac[1]}")
     if extra:
-        lines.extend("    " + l for l in textwrap.dedent(extra).strip().splitlines())
+        extra_lines = [l for l in textwrap.dedent(extra).strip().splitlines() if l.strip()]
+        override = {l.split("=", 1)[0].strip() for l in extra_lines if "=" in l}
+        # Keys given in `extra` replace the defaults above (duplicate keys are a parse error).
+        lines = [l for l in lines if not (l.startswith("    ") and "=" in l and l.split("=", 1)[0].strip() in override)]
+        lines.extend("    " + l for l in extra_lines)
     with open(os.path.join(configdir, "config"), "w") as f:
         f.write("\n".join(lines) + "\n")
 

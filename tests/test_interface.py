@@ -119,3 +119,29 @@ def test_detach_and_attach(tmp_path, mesh):
     finally:
         site_a.close()
         site_b.close()
+
+
+def test_peer_rnsd_restart_replaces_dead_flow(tmp_path, mesh):
+    """When B's rnsd restarts and redials, A must switch to the new flow at once (HELLO nonce
+    differs), not wait for the old flow to time out. peer_timeout is set long to prove it."""
+    fips_a, site_a = make_site(tmp_path, mesh, "a", [f"{fake_npub('b')}:{PORT}"], extra="peer_timeout = 300")
+    fips_b, site_b = make_site(tmp_path, mesh, "b", [f"{fake_npub('a')}:{PORT}"], extra="peer_timeout = 300")
+    try:
+        assert site_a.wait_for(site_a.online_peers)
+        assert site_b.wait_for(site_b.online_peers)
+        dest = site_b.cmd("announce", app="rnsfipstest", aspects=["x"])["hash"]
+        assert site_a.wait_for(lambda: site_a.cmd("has_path", hash=dest)["has_path"], timeout=20)
+
+        site_b.close()  # B's rnsd dies; A's flow to it is now dead but A cannot know.
+        site_b2 = Site(str(tmp_path / "rns-b"))
+        assert site_b2.wait_for(site_b2.online_peers, timeout=40), site_b2.log()[-3000:]
+        # A must be up on the NEW flow well within peer_timeout.
+        assert site_a.wait_for(site_a.online_peers, timeout=20)
+        t0 = time.time()
+        dest2 = site_b2.cmd("announce", app="rnsfipstest", aspects=["y"])["hash"]
+        assert site_a.wait_for(lambda: site_a.cmd("has_path", hash=dest2)["has_path"], timeout=30)
+        assert time.time() - t0 < 30
+        assert len(site_a.peer_interfaces()) == 1
+        site_b2.close()
+    finally:
+        site_a.close()

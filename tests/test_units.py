@@ -6,10 +6,10 @@ from rnsfips.cli import main, render_units
 
 
 def test_render_units_paths():
-    units = render_units("/opt/v/bin/rnsd", "/opt/v/bin/rnstatus", "/opt/v/bin/rnsfips", "/etc/rnsfips/tunnel.conf")
-    assert "ExecStart=/opt/v/bin/rnsd -v" in units["rnsd.service"]
+    units = render_units("/opt/v/bin/rnsd", "/opt/v/bin/rnstatus", "/opt/v/bin/rnsfips", "/etc/rnsfips/tunnel.conf", python="/opt/v/bin/python")
+    assert "ExecStart=/opt/v/bin/python -u /opt/v/bin/rnsd -v" in units["rnsd.service"]
     t = units["rnsfips-tunnel.service"]
-    assert "ExecStart=/opt/v/bin/rnsfips tunnel --config /etc/rnsfips/tunnel.conf -v" in t
+    assert "ExecStart=/opt/v/bin/python -u /opt/v/bin/rnsfips tunnel --config /etc/rnsfips/tunnel.conf -v" in t
     assert "/opt/v/bin/rnstatus" in t and "Requires=rnsd.service" in t
 
 

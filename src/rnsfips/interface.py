@@ -43,7 +43,8 @@ from .fipsapi import DEFAULT_PORT, FipsApi, FipsApiError, Flow, FlowClosed, List
 from .fipsdns import DEFAULT_DNS, resolve_npub
 from . import discovery
 
-HELLO_TIMEOUT = 10.0
+HELLO_TIMEOUT = 30.0  # FIPS session setup plus a discovery retry ladder can take ~20 s
+HELLO_RESEND = 3.0    # datagrams are unreliable and the far listener may not exist yet
 MIN_HW_MTU = RNS.Reticulum.MTU
 
 
@@ -591,15 +592,22 @@ class FIPSInterface(Interface):
         with self.lock:
             existing = self.peers.get(npub)
             if existing is not None and existing is not pf:
-                local = pf.flow.node
-                keep_initiator = local < npub  # the smaller npub's dial wins
-                if pf.initiator == keep_initiator:
-                    RNS.log(f"{self} replacing duplicate flow to {npub[:16]}…", RNS.LOG_DEBUG)
+                same_instance = existing.hello is not None and existing.hello.get("nonce") == hello.get("nonce")
+                if not same_instance:
+                    # A different nonce means the peer's rnsd restarted: its old flow
+                    # is dead on their side. The new flow wins, whoever dialled it.
+                    RNS.log(f"{self} peer {npub[:16]}… restarted; replacing its old flow", RNS.LOG_DEBUG)
                     self._close_pf(existing, forget=True)
                 else:
-                    RNS.log(f"{self} dropping duplicate flow to {npub[:16]}…", RNS.LOG_DEBUG)
-                    self._close_pf(pf, forget=True)
-                    return
+                    local = pf.flow.node
+                    keep_initiator = local < npub  # simultaneous dials: the smaller npub's dial wins
+                    if pf.initiator == keep_initiator:
+                        RNS.log(f"{self} replacing duplicate flow to {npub[:16]}…", RNS.LOG_DEBUG)
+                        self._close_pf(existing, forget=True)
+                    else:
+                        RNS.log(f"{self} dropping duplicate flow to {npub[:16]}…", RNS.LOG_DEBUG)
+                        self._close_pf(pf, forget=True)
+                        return
             child = self.spawned_interfaces.get(npub)
             if child is None:
                 child = self._spawn_child(npub)
@@ -688,6 +696,8 @@ class FIPSInterface(Interface):
             if not pf.established:
                 if now - pf.created > HELLO_TIMEOUT:
                     self._lose(pf, "no HELLO")
+                elif now - pf.last_tx > HELLO_RESEND:
+                    self._send_raw(pf, self._hello_bytes(pf.flow))
                 continue
             if now - pf.last_rx > self.peer_timeout:
                 self._lose(pf, f"silent for {self.peer_timeout:.0f}s")
