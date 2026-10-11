@@ -53,7 +53,9 @@ mesh.
   that have no other way in.
 - `rnsfips install-units` writes systemd user units; enable lingering so they
   outlive the login session. Disable the tunnel unit on hosts with no
-  `tunnel.conf`.
+  `tunnel.conf`. Stop a hand-started rnsd before enabling the unit: an rnsd
+  started next to a running instance becomes a client of it and stays a
+  (useless) client after the other exits; restart the unit if that happened.
 - Reticulum ignores a re-announce emitted in the same second as the previous
   one, and its logs are block-buffered when stdout is a file
   (`PYTHONUNBUFFERED=1`).

@@ -166,7 +166,13 @@ loginctl enable-linger "$USER"        # keep user services running without a log
 
 The tunnel unit requires `rnsd.service` and waits for its shared instance to
 answer before starting, because a tunnel started first would become its own
-Reticulum instance. `sudo rnsfips install-units --system` writes system units to
+Reticulum instance.
+
+Stop any `rnsd` you started by hand **before** enabling the unit. An rnsd that
+starts while another instance is running attaches to it as a client and never
+takes over when that instance exits; the service then looks active but serves
+nothing (`rnsfips status` reports "shared instance not reachable"). If that
+happens, `systemctl --user restart rnsd` fixes it. `sudo rnsfips install-units --system` writes system units to
 `/etc/systemd/system` instead (tunnel config at `/etc/rnsfips/tunnel.conf`).
 
 ## Development
