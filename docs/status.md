@@ -37,6 +37,16 @@ mesh.
   over the Phase 1 FIPS interface (FIPS over Reticulum over FIPS). The
   isolated daemon never saw anything but a loopback UDP peer.
 
+### Phase 3: operations
+
+- `rnsfips status` identified a hollow rnsd on the VM (started beside a
+  running instance, left as a client) within one run.
+- Announce-based discovery: after the 0.1.0 code was deployed on both sites,
+  each listed the other as a discovered bridge within a minute without any
+  configuration beyond the original `peers` entry.
+- A restart of either rnsd now recovers within a second on the other side
+  (nonce-based flow replacement), verified on the live pair.
+
 ### Deployment notes learned
 
 - `rnsd` must run in the same Python environment as `rnsfips`; Reticulum

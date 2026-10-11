@@ -23,11 +23,25 @@ wire envelope, MTU handling and lifecycle details, and
 
 ## Status
 
-Phase 1 (Reticulum over FIPS) is implemented and tested against a fake FIPS
-daemon and in a Docker lab with a real three-node FIPS mesh. Phase 2 (FIPS over
-Reticulum) is implemented as a daemon with bridge-level fragmentation. The FIPS
-native datagram API is itself experimental and off by default; its surface may
-change.
+Version 0.1.0. Both directions are implemented, covered by tests against a
+fake FIPS daemon and a Docker lab with a real three-node FIPS mesh, and
+verified live between two sites on the public FIPS mesh (see
+[docs/status.md](docs/status.md)). Bridges discover each other over
+Reticulum announces, run as systemd user services, and report through
+`rnsfips status`.
+
+The FIPS native datagram API that the Reticulum-over-FIPS direction relies on
+is itself experimental and off by default in FIPS; its surface may change.
+
+## Commands
+
+| command | purpose |
+| --- | --- |
+| `rnsfips install-interface` | install the Reticulum interface shim into `~/.reticulum/interfaces/` |
+| `rnsfips install-units` | write systemd user units for `rnsd` and the tunnel |
+| `rnsfips status` | FIPS node, Reticulum FIPS interfaces, discovered bridges and tunnel state in one view |
+| `rnsfips tunnel` | run the FIPS-over-Reticulum tunnel daemon |
+| `rnsfips tunnel-ctl status\|announce\|add_peer\|remove_peer` | control a running tunnel |
 
 ## Requirements
 
@@ -193,9 +207,15 @@ happens, `systemctl --user restart rnsd` fixes it. `sudo rnsfips install-units -
 
 ```sh
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-.venv/bin/pytest                     # unit tests + two-site Reticulum tests (~1 min)
+.venv/bin/pytest                     # unit tests + multi-site Reticulum tests (~1 min)
 lab/build.sh && lab/smoke.sh         # Docker: real FIPS mesh, three nodes
 ```
+
+The test suite needs no FIPS daemon: `tests/fake_fips.py` implements the
+native API line protocol over real Unix sockets, and Reticulum sites run as
+subprocesses (`tests/site.py`). CI runs the suite on every push and pull
+request (`.github/workflows/ci.yml`). Releases are tagged `vX.Y.Z`; see
+[CHANGELOG.md](CHANGELOG.md).
 
 The Docker lab copies the host's `fips`/`fipsctl` binaries into a Debian image
 (no Rust toolchain needed) and brings up `site-a <-> relay <-> site-b`, where

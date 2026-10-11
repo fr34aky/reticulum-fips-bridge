@@ -75,6 +75,29 @@ before commit 55fb970 require to verify the discovery proof for a native flow
 to a node more than one hop away. Newer builds cache the key from the
 `connect` command itself; the extra query is then harmless.
 
+Peer restarts: HELLO carries a per-process nonce. When a HELLO from a known
+npub arrives with a different nonce, the peer's rnsd has restarted and its
+old flow is dead on their side, so the new flow replaces the old one at once,
+whichever side dialled it. Only with an equal nonce (both sides dialled each
+other at the same time) does the dedupe rule apply: the flow dialled by the
+lexicographically smaller npub wins. While a flow is pending, HELLO is
+re-sent every 3 s for up to 30 s, because datagrams are unreliable, the far
+listener may not exist yet, and FIPS session setup with a discovery retry
+ladder can take about 20 s.
+
+### Discovery (`rnsfips.discovery`)
+
+Each interface announces a Reticulum destination `rnsfips.bridge` whose
+`app_data` is msgpack `{v, n: key, p: port, t: transport id, b: [[key, port], ...]}`:
+its own FIPS npub (32-byte x-only key), the FIPS port it holds, and up to six
+recently seen bridges (gossip). Announces go out at `announce_interval`
+(default 1 h) and about 30 s after a new peer comes up, so a newcomer learns
+the rest of the bridges from the first peer's announce. With `auto_peer = yes`
+learned bridges are dialled over FIPS like configured ones and accepted
+inbound; without it they are only listed (`rnsfips status`, state file
+`storage/rnsfips_bridges.json`). Discovery runs over Reticulum, so it needs one
+existing Reticulum path; it never replaces the first configured peer.
+
 ## FIPS over Reticulum (`rnsfips.tunnel`)
 
 `rnsfips tunnel` is a Reticulum shared-instance client. It registers the
@@ -95,6 +118,13 @@ tunnel never lowers the node-wide MTU; fragmentation is the bridge's job. Over
 a Reticulum path whose link MDU is below about 1100 bytes, a FIPS bloom announce
 costs three Reticulum packets. On Backbone/TCP-class paths with link MTU
 discovery it fits in one.
+
+The tunnel exposes a JSON-line control socket
+(`$XDG_RUNTIME_DIR/rnsfips/tunnel.sock`, `control_socket` in `tunnel.conf`)
+with `status`, `announce`, `add_peer` and `remove_peer`, used by `rnsfips
+status` and `rnsfips tunnel-ctl`. Inbound links must identify themselves
+(`Link.identify`) and are admitted by the `allow` list before their HELLO is
+processed.
 
 FIPS's control plane assumes IP-class links. Over LoRa-class Reticulum paths,
 set `node.mmp.mode: minimal` and raise `node.link_dead_timeout_secs` on the FIPS
