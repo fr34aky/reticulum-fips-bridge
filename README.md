@@ -10,7 +10,8 @@ and the [FIPS](https://github.com/jmcorgan/fips) mesh, in both directions:
   Reticulum keeps its own end-to-end cryptography untouched.
 * **FIPS over Reticulum.** `rnsfips tunnel` carries FIPS wire frames over
   Reticulum links and presents the far end to the local FIPS daemon as a UDP
-  peer. FIPS nodes separated by a Reticulum backbone become FIPS peers.
+  peer. A FIPS node whose only way out is a Reticulum network still joins the
+  FIPS mesh.
 
 Reticulum is used purely as a library (the `rns` package); no Reticulum code
 is copied or ported. FIPS is driven through its documented Unix sockets; no
@@ -18,15 +19,16 @@ FIPS code is modified.
 
 See [docs/comparison.md](docs/comparison.md) for how the two stacks compare and
 why the bridge sits where it does, [docs/design.md](docs/design.md) for the
-wire envelope, MTU handling, lifecycle details and why the bridge cannot
-create routing loops, and
-[docs/status.md](docs/status.md) for the live verification log.
+wire envelope, MTU handling, lifecycle, discovery and why the bridge cannot
+create routing loops, and [docs/status.md](docs/status.md) for the live
+verification log.
 
 ## Status
 
-Version 0.1.0. Both directions are implemented, covered by tests against a
+Version 0.1.x. Both directions are implemented, covered by tests against a
 fake FIPS daemon and a Docker lab with a real three-node FIPS mesh, and
-verified live between two sites on the public FIPS mesh (see
+verified live between three real nodes on the public FIPS mesh, including a
+FIPS node reachable only through the tunnel (see
 [docs/status.md](docs/status.md)). Bridges discover each other over
 Reticulum announces, run as systemd user services, and report through
 `rnsfips status`.
@@ -34,56 +36,70 @@ Reticulum announces, run as systemd user services, and report through
 The FIPS native datagram API that the Reticulum-over-FIPS direction relies on
 is itself experimental and off by default in FIPS; its surface may change.
 
-## Commands
+## Which setup do you need?
 
-| command | purpose |
-| --- | --- |
-| `rnsfips install-interface` | install the Reticulum interface shim into `~/.reticulum/interfaces/` |
-| `rnsfips install-units` | write systemd user units for `rnsd` and the tunnel |
-| `rnsfips status` | FIPS node, Reticulum FIPS interfaces, discovered bridges and tunnel state in one view |
-| `rnsfips tunnel` | run the FIPS-over-Reticulum tunnel daemon |
-| `rnsfips tunnel-ctl status\|announce\|add_peer\|remove_peer` | control a running tunnel |
+The two directions are independent. Pick the one that matches your goal; a
+node can run both, but nothing requires it.
 
-## Requirements
+| You want | Direction | What runs where |
+| --- | --- | --- |
+| Reticulum nodes at two or more sites to reach each other, with the public FIPS mesh as the backbone | **A: Reticulum over FIPS** | at each site: a FIPS daemon with the native API, `rnsd` with the `[[FIPS]]` interface |
+| A FIPS node that has no internet path to the FIPS mesh (behind LoRa, serial, or a private network) to join the mesh through a Reticulum link | **B: FIPS over Reticulum** | on the cut-off node and on one node that is on the mesh: `rnsd` with a Reticulum link between them, plus `rnsfips tunnel` |
 
-* Python 3.9+, `rns >= 1.5.5`
-* A FIPS daemon (0.5.0 or newer) with `node.native_api.enabled: true`
-  (Linux or FreeBSD: the native API needs `SOCK_SEQPACKET` and `SCM_RIGHTS`).
-  FIPS builds before commit 55fb970 cannot complete discovery for a native
-  flow to a node more than one hop away unless the node's key is already in
-  the identity cache; the interface works around this by resolving
-  `<npub>.fips` at the daemon's DNS responder before dialing, so leave
-  `dns.enabled` on (it is by default).
-* The user running `rnsd` must be able to open the FIPS API socket
-  (group `fips` on a packaged install)
+Rules of thumb:
 
-## Reticulum over FIPS: quick start
+* Direction A needs the FIPS native API enabled; direction B does not.
+* Direction B needs a Reticulum path between the two `rnsd`s that does not
+  depend on FIPS (a TCP interface, LoRa, anything). It also only does useful
+  work for a FIPS node that cannot reach the mesh otherwise: FIPS never dials
+  a peer it already holds a session with, so a tunnel between two nodes that
+  peer directly sits idle.
+* "Both quick starts" is never required. Follow one of the two walkthroughs
+  below, after the common installation.
 
-On every site:
-
-```sh
-pip install rns rnsfips            # or: pip install -e . from this checkout
-rnsfips install-interface          # writes ~/.reticulum/interfaces/FIPSInterface.py (shim from the package)
-```
+## Installation (every node, both directions)
 
 `rnsd` must run in the same Python environment as `rnsfips`, because Reticulum
-imports the interface inside its own interpreter. With pipx, install once and
-expose Reticulum's tools from that venv rather than installing `rns` separately:
+imports the interface inside its own interpreter. With pipx:
 
 ```sh
 git clone https://github.com/fr34aky/reticulum-fips-bridge
 pipx install ./reticulum-fips-bridge    # not on PyPI yet; one package per pipx install
-pipx inject rnsfips rns --include-apps
+pipx inject rnsfips rns --include-apps  # rnsd, rnstatus, rncp... from the same venv
 readlink -f "$(command -v rnsd)"        # must point into .../pipx/venvs/rnsfips/
 ```
 
 If a separate `rns` pipx venv already exists, `pipx uninstall rns` so its
-`rnsd` does not shadow the one that can import the bridge.
+`rnsd` does not shadow the one that can import the bridge. Plain `pip install
+rns ./reticulum-fips-bridge` into one venv works just as well.
 
-If `~/.reticulum/config` does not exist yet, run `rnsd` once to create it (or
-`rnsd --exampleconfig > ~/.reticulum/config`) and set `enable_transport = yes`.
+Then create the Reticulum config if it does not exist yet and turn the node
+into a transport node:
 
-Enable the native API on the FIPS daemon (`/etc/fips/fips.yaml`) and restart it:
+```sh
+rnsd --exampleconfig > ~/.reticulum/config   # only if ~/.reticulum/config is missing
+```
+
+In `~/.reticulum/config`, set `enable_transport = yes` in the `[reticulum]`
+section. Install the services now or later (see
+[Running as services](#running-as-services)); the walkthroughs assume `rnsd`
+runs as the user unit.
+
+Requirements: Python 3.9+, `rns >= 1.5.5`, a FIPS daemon 0.5.0 or newer whose
+control socket the user can open (group `fips` on a packaged install). Direction
+A additionally needs the native API (Linux or FreeBSD; it uses
+`SOCK_SEQPACKET` and `SCM_RIGHTS`). FIPS builds before commit 55fb970 cannot
+complete discovery for a native flow to a node more than one hop away unless
+the node's key is already cached; the interface works around this by
+resolving `<npub>.fips` at the daemon's DNS responder before dialing, so leave
+`dns.enabled` on.
+
+## A: Reticulum over FIPS, step by step
+
+Goal: `rnsd` at site 1 and `rnsd` at site 2 become one Reticulum network over
+the FIPS mesh. Repeat steps 1 to 4 at every site.
+
+**1. Enable the FIPS native API.** In `/etc/fips/fips.yaml`:
 
 ```yaml
 node:
@@ -91,7 +107,18 @@ node:
     enabled: true
 ```
 
-Add the interface to `~/.reticulum/config`, listing the other sites' FIPS npubs:
+then `sudo systemctl restart fips`. `fipsctl show status` prints the node's
+npub; note it, the other sites need it.
+
+**2. Install the interface shim** into Reticulum's interface directory:
+
+```sh
+rnsfips install-interface          # writes ~/.reticulum/interfaces/FIPSInterface.py
+```
+
+**3. Add the interface** to `~/.reticulum/config`, inside the `[interfaces]`
+section, listing the other sites' npubs. The first site can leave `peers`
+empty and let the others dial it:
 
 ```ini
 [interfaces]
@@ -101,11 +128,33 @@ Add the interface to `~/.reticulum/config`, listing the other sites' FIPS npubs:
     mode = full
     listen_port = 21075
     peers = npub1aaaa..., npub1bbbb...
+    auto_peer = yes
 ```
 
-Start `rnsd`. `rnstatus` lists one `FIPSPeerInterface` per peer once the HELLO
-exchange completes; Reticulum links across the FIPS hop negotiate an MTU of
-about 1150 bytes instead of 500.
+`auto_peer = yes` makes the site dial every bridge it learns about from
+announces and accept their flows, so beyond the first `peers` entry no site
+needs the full list. Leave it off, and use `peers`/`allow`, on a bridge that
+should only talk to an explicit set. Do not comment out individual keys of a
+block you want active: an interface with its `peers` line commented out starts
+with "0 configured peer(s)" and refuses the other side.
+
+**4. Start rnsd** (`systemctl --user restart rnsd`) and check:
+
+```sh
+rnsfips status
+```
+
+The FIPS section must show a native API listener on 21075, and after the HELLO
+exchange (a few seconds, up to about 30 s when FIPS has to discover the peer)
+the Reticulum section shows one `FIPSPeerInterface[...]` per peer as `up`
+with MTU 1169. `rnstatus` shows the same interfaces. From then on it is plain
+Reticulum: announces from the far site arrive, `rnpath` finds destinations one
+hop away via the FIPS peer interface, `rncp` and links work with an MTU of
+1169 instead of 500.
+
+**5. Add a third site** by repeating 1 to 4 with a single existing bridge in
+`peers`. It learns the others from that bridge's announce within a minute and,
+with `auto_peer`, dials them directly.
 
 Interface options:
 
@@ -117,78 +166,151 @@ Interface options:
 | `peers` | | comma-separated `npub[:port]` to dial and keep connected |
 | `allow` | | extra npubs accepted inbound (configured peers are always accepted) |
 | `accept_unknown` | no | accept inbound flows from any npub |
+| `auto_peer` | no | dial bridges learned from announces, and accept their inbound flows |
+| `announce` | yes | announce this bridge over Reticulum (`rnsfips.bridge` destination) so other bridges can discover it |
+| `announce_interval` | 3600 s | re-announce period; a fresh announce also goes out shortly after a new peer comes up |
 | `ping_interval` / `peer_timeout` | 15 / 60 s | bridge-level liveness, since FIPS flows have no far-end close |
 | `mtu` | computed | cap the interface MTU below what the FIPS flow allows |
 | `fips_dns` | `[::1]:5354` | FIPS `.fips` resolver used to prime the daemon's identity cache before dialing; `off` to disable |
-| `announce` | yes | announce this bridge over Reticulum (`rnsfips.bridge` destination) so other bridges can discover it |
-| `announce_interval` | 3600 s | re-announce period; a fresh announce also goes out shortly after a new peer comes up |
-| `auto_peer` | no | dial bridges learned from announces, and accept their inbound flows |
-
-### Discovery
-
-Every interface announces a small Reticulum destination carrying its FIPS npub,
-its port, and the bridges it already knows. A new site therefore needs only
-**one** existing bridge in `peers`; with `auto_peer = yes` it learns the rest
-from that peer's announce and dials them directly over FIPS, and existing
-sites learn the newcomer the same way. Discovery rides on Reticulum
-connectivity, so it never replaces the first configured peer. Learned bridges
-are listed by `rnsfips status`. Leave `auto_peer` off on bridges that should
-only talk to an explicit `peers`/`allow` list.
 
 All standard Reticulum interface options (`mode`, `network_name`,
 `passphrase`, `announce_cap`, `bitrate`, `outgoing`, ...) apply and are inherited
 by every peer interface. Use `mode = full` on both ends for site-to-site;
 `mode = gateway` on the side that should resolve paths for the other.
 
-## FIPS over Reticulum: quick start
+## B: FIPS over Reticulum, step by step
 
-On each FIPS node that should reach the other across a Reticulum network, with
-`rnsd` already running and connected to that network, create
-`~/.config/rnsfips/tunnel.conf`:
+Goal: the FIPS daemon on node **X**, which cannot reach the FIPS mesh, joins it
+through the FIPS daemon on node **Y**, which is on the mesh. Both nodes run
+`rnsd`; the tunnel rides on a Reticulum link between them.
+
+**1. Give the two rnsds a Reticulum path** that does not go through FIPS. For
+two machines on the internet, a TCP interface is the simplest. On Y, in
+`~/.reticulum/config` under `[interfaces]`:
+
+```ini
+  [[TCP Server]]
+    type = TCPServerInterface
+    enabled = yes
+    listen_ip = 0.0.0.0
+    listen_port = 4242
+```
+
+and open TCP 4242 in Y's firewall. On X:
+
+```ini
+  [[Y]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = <Y's address>
+    target_port = 4242
+```
+
+The client keys are `target_host` and `target_port`; the server keys
+`listen_ip`/`listen_port` in a client block make rnsd crash at start. Restart
+`rnsd` on both, and confirm with `rnstatus` on X that the TCP interface is
+`Up`. Any other Reticulum link works the same way: LoRa, I2P, an existing
+Reticulum network both are already on.
+
+**2. Write the tunnel config** on both nodes, `~/.config/rnsfips/tunnel.conf`:
 
 ```ini
 [tunnel]
 # the local FIPS daemon's UDP transport
 fips_udp_addr = 127.0.0.1:2121
-# remote tunnel destination hashes; fill in after the first start
+# remote tunnel destination hashes to dial; may stay empty with auto_peer
 peers =
 # which remote tunnels may link to us: destination hashes, or any
 allow = any
+# dial every tunnel learned from announces that allow admits
+auto_peer = yes
 ```
 
-and run `rnsfips tunnel -v`. The daemon logs its own destination hash
-(`rnsfips tunnel <hash> for FIPS node npub1...`). Put the other side's hash
-into `peers` on at least one side and restart; the two tunnels link, exchange
-npubs, and each tells its FIPS daemon to peer with the other over a
-`127.0.0.1` UDP port. `fipsctl show peers` then lists the remote npub with a
-loopback transport address, and FIPS traffic (`ping6 <npub>.fips`, the native
-API, everything) flows through Reticulum.
+The tunnel needs the FIPS control socket and a UDP transport on the FIPS
+daemon; the native API is not used.
 
-Tunnels also announce themselves over Reticulum (`rnsfips.tunnel`); learned
-tunnels are listed by `rnsfips status`, and `auto_peer = yes` in `tunnel.conf`
-dials any learned tunnel that `allow` admits. FIPS itself only ever sees a
-loopback UDP peer; reaching the rest of the mesh behind it is FIPS's own
-spanning tree and bloom routing. Both directions are laid out in
-[docs/design.md](docs/design.md#discovery-who-finds-whom).
+**3. Start the tunnel as a service** on both nodes:
 
-The tunnel needs the FIPS control socket (group `fips`) and a UDP transport on
-the FIPS daemon. FIPS frames larger than the Reticulum link MDU are fragmented
-by the bridge; on 500-byte Reticulum hops a FIPS bloom announce costs three
-packets. FIPS's timers (10 s heartbeats, 30 s link-dead) suit internet-class
-Reticulum paths; LoRa-class paths are experimental, see
+```sh
+rnsfips install-units
+systemctl --user daemon-reload
+systemctl --user enable --now rnsfips-tunnel.service
+```
+
+`rnsfips tunnel -v` in a terminal does the same in the foreground for a first
+look, but do not run it next to the service: both would want the same control
+socket, and the second one exits with a message saying so.
+
+**4. Connect the two tunnels.** Each tunnel announces itself over Reticulum
+when it starts and every 30 minutes. If X's tunnel started before the
+Reticulum path to Y existed, it has not heard Y yet; trigger an announce on
+either side:
+
+```sh
+rnsfips tunnel-ctl announce
+```
+
+Within seconds `rnsfips status` on both nodes lists the other tunnel under
+"discovered", and with `auto_peer` one of them dials. Without `auto_peer`, put
+the other side's destination hash (the `destination` line of its
+`rnsfips status`) into `peers` on one side and restart that tunnel. Either
+way both sides then show the peer as `up` with an `npub=` and a `udp=` port,
+and the FIPS section shows a "tunnel peer" at `127.0.0.1:<port>`. Listing
+each other in `peers` on both sides is fine: only one link per pair is kept.
+
+**5. Check FIPS.** On X, `fipsctl show peers` lists Y's npub with a loopback
+transport address, and `fipsctl show status` reports the mesh size learned
+through it. `fipsctl probe <npub of any mesh node>` from X now routes through
+Y. All FIPS traffic from X, `ping6 <npub>.fips`, the native API, everything,
+flows through Reticulum.
+
+**6. Make X depend on the tunnel only** (optional, for a real test or a node
+that must not have other transports). In X's `/etc/fips/fips.yaml` set
+`peers: []`, disable `node.rendezvous.nostr` and `node.rendezvous.lan`, bind
+the UDP transport to `127.0.0.1:2121`, and restart FIPS. X's only peer is then
+Y via the tunnel; it reaches the rest of the mesh through FIPS's own spanning
+tree and bloom routing.
+
+Tunnel options (`[tunnel]` section):
+
+| key | default | meaning |
+| --- | --- | --- |
+| `fips_udp_addr` | `127.0.0.1:2121` | the local FIPS daemon's UDP transport address |
+| `fips_control` | auto | path to the FIPS control socket |
+| `peers` | | destination hashes of remote tunnels to dial |
+| `allow` | | hashes admitted inbound, or `any` |
+| `auto_peer` | no | also dial tunnels learned from announces, if `allow` admits them |
+| `announce_interval` | 1800 s | re-announce period |
+| `control_socket` | `$XDG_RUNTIME_DIR/rnsfips/tunnel.sock` | control socket for `rnsfips status` and `tunnel-ctl`; `off` to disable |
+| `standalone` | no | run an own Reticulum instance instead of joining rnsd's (hosts without rnsd) |
+| `reconnect_wait` / `max_reconnect_wait` | 5 / 120 s | redial backoff |
+
+FIPS frames larger than the Reticulum link MDU are fragmented by the bridge; on
+500-byte Reticulum hops a FIPS bloom announce costs three packets, on TCP-class
+hops it fits in one. FIPS's timers (10 s heartbeats, 30 s link-dead) suit
+internet-class Reticulum paths; LoRa-class paths are experimental, see
 [docs/design.md](docs/design.md#fips-over-reticulum).
 
 ## Checking on it
 
 `rnsfips status` shows the three views side by side: the FIPS node (native API
 listeners and flows, loopback tunnel peers, drop counters), the Reticulum FIPS
-interfaces from the running `rnsd`, and the tunnel (per-peer link state, MDU,
-frame counters, discovered tunnels). `--json` gives the raw data.
+interfaces from the running `rnsd` plus discovered bridges, and the tunnel
+(per-peer link state, MDU, frame counters, discovered tunnels). `--json` gives
+the raw data.
 
 `rnsfips tunnel-ctl status|announce|add_peer <hash>|remove_peer <hash>` talks
-to the running tunnel over its control socket
-(`$XDG_RUNTIME_DIR/rnsfips/tunnel.sock`, set `control_socket` in `tunnel.conf`
-to move or disable it).
+to the running tunnel over its control socket.
+
+Commands:
+
+| command | purpose |
+| --- | --- |
+| `rnsfips install-interface` | install the Reticulum interface shim into `~/.reticulum/interfaces/` |
+| `rnsfips install-units` | write systemd user units for `rnsd` and the tunnel |
+| `rnsfips status` | FIPS node, Reticulum FIPS interfaces, discovered bridges and tunnel state in one view |
+| `rnsfips tunnel` | run the FIPS-over-Reticulum tunnel daemon in the foreground |
+| `rnsfips tunnel-ctl status\|announce\|add_peer\|remove_peer` | control a running tunnel |
 
 ## Running as services
 
@@ -204,21 +326,19 @@ systemctl --user enable --now rnsfips-tunnel.service   # only where ~/.config/rn
 loginctl enable-linger "$USER"        # keep user services running without a login session
 ```
 
-The tunnel unit requires `rnsd.service` and waits for its shared instance to
-answer before starting, because a tunnel started first would become its own
-Reticulum instance.
+Things that bite:
 
-The tunnel joins rnsd's shared instance and waits for it rather than racing
-it (a tunnel that started first would otherwise become the shared instance and
-turn rnsd into a client). Set `standalone = yes` in `tunnel.conf` only on a
-host that runs no rnsd.
-
-Stop any `rnsd` you started by hand **before** enabling the unit. An rnsd that
-starts while another instance is running attaches to it as a client and never
-takes over when that instance exits; the service then looks active but serves
-nothing (`rnsfips status` reports "shared instance not reachable"). If that
-happens, `systemctl --user restart rnsd` fixes it. `sudo rnsfips install-units --system` writes system units to
-`/etc/systemd/system` instead (tunnel config at `/etc/rnsfips/tunnel.conf`).
+* Stop any `rnsd` you started by hand **before** enabling the unit. An rnsd
+  that starts while another instance is running attaches to it as a client and
+  never takes over when that instance exits; the service then looks active but
+  serves nothing (`rnsfips status` reports "shared instance not reachable").
+  `systemctl --user restart rnsd` fixes it.
+* The tunnel unit requires `rnsd.service`, so restarting rnsd restarts the
+  tunnel too. A tunnel-only node (direction B, step 6) is off the mesh for the
+  few seconds until the other side redials.
+* Set `standalone = yes` in `tunnel.conf` only on a host that runs no rnsd.
+* `sudo rnsfips install-units --system` writes system units to
+  `/etc/systemd/system` instead (tunnel config at `/etc/rnsfips/tunnel.conf`).
 
 ## Development
 

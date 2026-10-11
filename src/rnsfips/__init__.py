@@ -10,4 +10,4 @@ Two pieces live here:
 Reticulum is used strictly as a library. No Reticulum code is copied here.
 """
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
