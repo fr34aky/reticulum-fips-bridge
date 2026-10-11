@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 (2026-10-11)
+
+- `rnsfips tunnel` waits for rnsd's shared instance and requires it. A tunnel
+  restarted together with rnsd (the unit has `Requires=rnsd.service`) could
+  win the start race, become the shared instance itself and leave rnsd as a
+  client serving nothing. `standalone = yes` keeps the old behaviour for hosts
+  without rnsd.
+
 ## 0.1.0 (2026-10-11)
 
 First release. Both bridge directions, verified live between two sites on the

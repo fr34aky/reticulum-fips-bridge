@@ -100,7 +100,10 @@ existing Reticulum path; it never replaces the first configured peer.
 
 ## FIPS over Reticulum (`rnsfips.tunnel`)
 
-`rnsfips tunnel` is a Reticulum shared-instance client. It registers the
+`rnsfips tunnel` is a Reticulum shared-instance client: it waits for rnsd's
+shared instance and starts with `require_shared_instance`, so it can never
+become the instance itself when restarted alongside rnsd (`standalone = yes`
+opts into an own instance on hosts without rnsd). It registers the
 destination `rnsfips.tunnel`, announces it with `app_data` = msgpack
 `{v, npub, port}` (this node's FIPS npub and the FIPS UDP port the tunnel
 feeds), and keeps one Reticulum `Link` per remote tunnel.

@@ -196,6 +196,11 @@ The tunnel unit requires `rnsd.service` and waits for its shared instance to
 answer before starting, because a tunnel started first would become its own
 Reticulum instance.
 
+The tunnel joins rnsd's shared instance and waits for it rather than racing
+it (a tunnel that started first would otherwise become the shared instance and
+turn rnsd into a client). Set `standalone = yes` in `tunnel.conf` only on a
+host that runs no rnsd.
+
 Stop any `rnsd` you started by hand **before** enabling the unit. An rnsd that
 starts while another instance is running attaches to it as a client and never
 takes over when that instance exits; the service then looks active but serves

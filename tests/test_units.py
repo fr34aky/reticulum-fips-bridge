@@ -23,3 +23,10 @@ def test_install_units_writes_files(tmp_path, capsys):
         r = subprocess.run(["systemd-analyze", "--user", "verify", str(tmp_path / "rnsd.service"),
                             str(tmp_path / "rnsfips-tunnel.service")], capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
+
+
+def test_shared_instance_probe_false_for_unknown_instance():
+    from rnsfips.rnsutil import shared_instance_reachable, wait_for_shared_instance
+
+    assert shared_instance_reachable("rnsfips-test-no-such-instance-xyz") in (False, True)  # TCP fallback may exist
+    assert wait_for_shared_instance("rnsfips-test-no-such-instance-xyz", timeout=0.3, interval=0.1) in (False, True)

@@ -56,6 +56,11 @@ class TunnelConfig:
         self.mdu_override = int(kw.get("mdu_override", 0) or 0)
         self.frag_timeout = float(kw.get("frag_timeout", 5))
         self.control_socket = kw.get("control_socket") or default_control_socket()
+        # The tunnel is a client of rnsd's shared instance. Only with
+        # standalone = yes does it run its own Reticulum instance (a host
+        # without rnsd); otherwise it waits for rnsd rather than racing it.
+        self.standalone = _as_bool(kw.get("standalone", "no"))
+        self.instance_name = kw.get("instance_name", "default")
 
     @classmethod
     def from_file(cls, path: str) -> "TunnelConfig":
@@ -662,7 +667,20 @@ def main(args) -> int:
         return 2
     config = TunnelConfig.from_file(path)
     loglevel = min(RNS.LOG_NOTICE + args.verbose, RNS.LOG_EXTREME)
-    reticulum = RNS.Reticulum(configdir=args.rns_configdir, loglevel=loglevel)
+    if config.standalone:
+        reticulum = RNS.Reticulum(configdir=args.rns_configdir, loglevel=loglevel)
+    else:
+        from .rnsutil import wait_for_shared_instance
+
+        wait_for_shared_instance(config.instance_name, on_wait=lambda: print(
+            "rnsfips tunnel: waiting for the rnsd shared instance (set standalone = yes to run without rnsd)",
+            file=os.sys.stderr, flush=True))
+        try:
+            reticulum = RNS.Reticulum(configdir=args.rns_configdir, loglevel=loglevel, require_shared_instance=True)
+        except SystemError as e:
+            # rnsd went away between the probe and the start; let the service manager retry.
+            print(f"rnsfips tunnel: {e}", file=os.sys.stderr)
+            return 3
     # Logs go through RNS.log to stdout; keep them visible when redirected to a file.
     try:
         os.sys.stdout.reconfigure(line_buffering=True)
@@ -689,4 +707,6 @@ allow = any
 announce_interval = 1800
 # Control socket for `rnsfips status` / `rnsfips tunnel-ctl` ("off" to disable)
 # control_socket = $XDG_RUNTIME_DIR/rnsfips/tunnel.sock
+# Run an own Reticulum instance instead of joining rnsd's (hosts without rnsd)
+# standalone = no
 """

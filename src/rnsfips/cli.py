@@ -9,6 +9,7 @@ import shutil
 import sys
 
 from . import __version__
+from .rnsutil import shared_instance_reachable as _shared_instance_reachable
 
 SAMPLE_CONFIG = """\
   [[FIPS]]
@@ -170,27 +171,6 @@ next:
     if not args.system:
         print("user units stop at logout unless lingering is enabled: loginctl enable-linger $USER")
     return 0
-
-
-def _shared_instance_reachable(instance_name: str = "default") -> bool:
-    """Probe rnsd's shared-instance socket without starting a Reticulum instance."""
-    import socket
-
-    if sys.platform.startswith("linux"):
-        try:
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.settimeout(1)
-            s.connect(f"\0rns/{instance_name}")
-            s.close()
-            return True
-        except OSError:
-            pass
-    try:
-        s = socket.create_connection(("127.0.0.1", 37428), timeout=1)
-        s.close()
-        return True
-    except OSError:
-        return False
 
 
 def _reticulum_view() -> dict:
