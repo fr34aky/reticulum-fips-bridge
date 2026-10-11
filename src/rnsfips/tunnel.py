@@ -706,6 +706,8 @@ fips_udp_addr = 127.0.0.1:2121
 peers =
 # Which remote tunnels may link to us: destination hashes, or "any"
 allow = any
+# Also dial tunnels learned from announces, if allow admits them
+# auto_peer = no
 # Re-announce interval in seconds
 announce_interval = 1800
 # Control socket for `rnsfips status` / `rnsfips tunnel-ctl` ("off" to disable)

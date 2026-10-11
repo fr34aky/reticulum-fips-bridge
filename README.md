@@ -160,6 +160,13 @@ npubs, and each tells its FIPS daemon to peer with the other over a
 loopback transport address, and FIPS traffic (`ping6 <npub>.fips`, the native
 API, everything) flows through Reticulum.
 
+Tunnels also announce themselves over Reticulum (`rnsfips.tunnel`); learned
+tunnels are listed by `rnsfips status`, and `auto_peer = yes` in `tunnel.conf`
+dials any learned tunnel that `allow` admits. FIPS itself only ever sees a
+loopback UDP peer; reaching the rest of the mesh behind it is FIPS's own
+spanning tree and bloom routing. Both directions are laid out in
+[docs/design.md](docs/design.md#discovery-who-finds-whom).
+
 The tunnel needs the FIPS control socket (group `fips`) and a UDP transport on
 the FIPS daemon. FIPS frames larger than the Reticulum link MDU are fragmented
 by the bridge; on 500-byte Reticulum hops a FIPS bloom announce costs three

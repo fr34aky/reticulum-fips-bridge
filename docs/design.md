@@ -105,8 +105,8 @@ shared instance and starts with `require_shared_instance`, so it can never
 become the instance itself when restarted alongside rnsd (`standalone = yes`
 opts into an own instance on hosts without rnsd). It registers the
 destination `rnsfips.tunnel`, announces it with `app_data` = msgpack
-`{v, npub, port}` (this node's FIPS npub and the FIPS UDP port the tunnel
-feeds), and keeps one Reticulum `Link` per remote tunnel.
+`{v, npub, impl, ver}` (this node's FIPS npub, implementation name and
+version), and keeps one Reticulum `Link` per remote tunnel.
 
 Per remote tunnel the daemon binds a UDP socket on `127.0.0.1` and asks the
 local FIPS daemon over its control socket to `connect` to the remote npub at
@@ -133,6 +133,79 @@ initiator never sees the tunnel as up.
 FIPS's control plane assumes IP-class links. Over LoRa-class Reticulum paths,
 set `node.mmp.mode: minimal` and raise `node.link_dead_timeout_secs` on the FIPS
 side, and expect it to be slow. This mode is experimental.
+
+## Discovery: who finds whom
+
+Two different things get discovered, and it helps to keep them apart. The
+bridge's own announces only answer "which other bridges exist, and should I
+dial them". Finding the nodes *behind* a bridge is left entirely to the native
+mechanism of the network being extended, which never learns that a bridge is
+involved. In both directions exactly one configured entry per new site is
+needed to obtain a first Reticulum path; everything after that is automatic.
+
+### Reticulum nodes across FIPS
+
+1. **Bridges find each other** through the `rnsfips.bridge` announce
+   described above. Because it is an ordinary Reticulum announce it propagates
+   through every transport node in the connected Reticulum network, over FIPS
+   hops and non-FIPS hops alike, so every bridge hears every other bridge's
+   own announce directly. The six-entry gossip list is an accelerator for
+   newcomers, not a limit on how many bridges can be known.
+2. **What a bridge does with a learned bridge** is a local policy decision.
+   With `auto_peer = yes` it dials the npub over FIPS and accepts that npub's
+   inbound flow; otherwise the entry is only recorded for `rnsfips status`,
+   and flows are admitted solely by `peers`, `allow` and `accept_unknown`.
+   With `auto_peer` on everywhere, N bridges converge to a full mesh of direct
+   FIPS flows, one per pair after dedupe. With it off, traffic between two
+   sites that are not configured with each other still works, but transits
+   the bridge they are both configured with, as two FIPS hops.
+3. **Reticulum nodes behind a bridge** need nothing from rnsfips. Once a
+   `FIPSPeerInterface` is up it is a regular interface on an rnsd with
+   `enable_transport = yes`. Destination announces from the far site cross it
+   like any TCP or LoRa hop, path requests and links follow the usual rules,
+   and an application sees only a path with one more hop.
+
+Freshness: a bridge is normally known everywhere within a minute of starting
+(announce on start, re-announce about 30 s after a new peer comes up), but a
+bridge that disappears stays in the discovered list until its entry ages out.
+
+### FIPS nodes across Reticulum
+
+1. **Tunnels find each other** through the `rnsfips.tunnel` announce. Each
+   `rnsfips tunnel` daemon announces its destination with its FIPS npub on
+   start and every `announce_interval` (default 30 min), listens for the
+   same aspect, and records every tunnel it hears for `rnsfips status`.
+   `peers` lists destination hashes it dials itself; `allow` (hashes or
+   `any`) lists who may link in; with `auto_peer = yes` a learned tunnel that
+   is also allowed is dialled automatically. Two tunnels bring up a Reticulum
+   link, identify to each other, exchange HELLOs carrying their npubs, and the
+   link becomes the pipe.
+2. **FIPS is handed a UDP peer, not a Reticulum path.** For each remote
+   tunnel the daemon binds a local UDP port on `127.0.0.1` and asks its own
+   FIPS daemon over the control socket to `connect` to the remote npub at
+   that address. FIPS sees one more directly connected UDP peer with a known
+   npub and runs its Noise IK handshake, heartbeats, spanning tree and bloom
+   announces over it unchanged.
+3. **FIPS nodes beyond that peer** are found by FIPS's own control plane.
+   The bridged peer joins the spanning tree and exchanges bloom filters, so
+   the node reaches any mesh member by the ordinary bloom lookup and Noise XK
+   session, through its tunnel peer and onward over real FIPS transports.
+   This is what the Phase 2 live test exercised: an isolated daemon whose
+   only peer was the tunnel probed a third mesh node successfully.
+
+Practical limit: FIPS will not dial a peer it already holds a live session
+with, so a tunnel between two FIPS nodes that already peer directly over the
+internet sits idle. The tunnel is for FIPS nodes whose only route out is
+Reticulum, for example behind a LoRa or serial link.
+
+### Summary
+
+| | Reticulum over FIPS | FIPS over Reticulum |
+| --- | --- | --- |
+| Bridge-to-bridge discovery | `rnsfips.bridge` announce + gossip, `auto_peer` | `rnsfips.tunnel` announce, `peers`/`allow`/`auto_peer` |
+| What the extended network gains | one more Reticulum interface | one more FIPS UDP peer on loopback |
+| Who finds the far nodes | Reticulum announces and path requests | FIPS spanning tree and bloom routing |
+| Minimum static config per new site | one npub in `peers` | one destination hash in `peers` (or `allow` + a peer that dials) |
 
 ## Routing loops
 
