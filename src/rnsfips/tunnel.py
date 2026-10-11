@@ -514,6 +514,11 @@ def main(args) -> int:
     config = TunnelConfig.from_file(path)
     loglevel = min(RNS.LOG_NOTICE + args.verbose, RNS.LOG_EXTREME)
     reticulum = RNS.Reticulum(configdir=args.rns_configdir, loglevel=loglevel)
+    # Logs go through RNS.log to stdout; keep them visible when redirected to a file.
+    try:
+        os.sys.stdout.reconfigure(line_buffering=True)
+    except (AttributeError, ValueError):
+        pass
     tunnel = Tunnel(config, reticulum).start()
     try:
         while True:

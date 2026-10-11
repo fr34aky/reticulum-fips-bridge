@@ -123,7 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_status)
 
     s = sub.add_parser("tunnel", help="run the FIPS-over-Reticulum tunnel daemon")
-    s.add_argument("--config", default="~/.config/rnsfips/tunnel.yaml", help="tunnel configuration file")
+    s.add_argument("--config", default="~/.config/rnsfips/tunnel.conf", help="tunnel configuration file")
     s.add_argument("--rns-configdir", default=None, help="Reticulum config dir (default: Reticulum's own search)")
     s.add_argument("-v", "--verbose", action="count", default=0)
     s.set_defaults(func=cmd_tunnel)
