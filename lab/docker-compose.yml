@@ -1,0 +1,56 @@
+# Two Reticulum sites bridged over a three-node FIPS mesh.
+#
+#   site-a  <-- net-ar -->  relay  <-- net-rb -->  site-b
+#
+# site-a and site-b never share an IP network. They are FIPS peers of the
+# relay only; FIPS routes between them. Each runs rnsd with the FIPS
+# interface, peered with the other's npub, so Reticulum traffic crosses the
+# FIPS mesh through the relay. The relay runs only FIPS.
+
+name: rnsfips-lab
+
+x-node: &node
+  build:
+    context: ..
+    dockerfile: lab/Dockerfile
+  image: rnsfips-lab:latest
+  volumes:
+    - shared:/shared
+  init: true
+
+services:
+  site-a:
+    <<: *node
+    hostname: site-a
+    environment:
+      NODE_NAME: site-a
+      FIPS_PEERS: relay
+      RNS_ENABLED: "1"
+      RNS_PEERS: site-b
+    networks: [net-ar]
+
+  relay:
+    <<: *node
+    hostname: relay
+    environment:
+      NODE_NAME: relay
+      FIPS_PEERS: site-a,site-b
+      RNS_ENABLED: "0"
+    networks: [net-ar, net-rb]
+
+  site-b:
+    <<: *node
+    hostname: site-b
+    environment:
+      NODE_NAME: site-b
+      FIPS_PEERS: relay
+      RNS_ENABLED: "1"
+      RNS_PEERS: site-a
+    networks: [net-rb]
+
+networks:
+  net-ar:
+  net-rb:
+
+volumes:
+  shared:
