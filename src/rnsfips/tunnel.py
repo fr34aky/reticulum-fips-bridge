@@ -261,6 +261,10 @@ class Tunnel:
         RNS.log(f"rnsfips tunnel {RNS.prettyhexrep(self.destination.hash)} for FIPS node {self.npub}", RNS.LOG_NOTICE)
         self.announce()
         for h in self.config.peers:
+            if h == self.destination.hash:
+                RNS.log(f"rnsfips tunnel: ignoring peer {RNS.prettyhexrep(h)}: that is this tunnel's own "
+                        "destination; peers must list the REMOTE tunnel's hash", RNS.LOG_WARNING)
+                continue
             self.peers[h] = Peer(self, h, initiator=True)
         t1 = threading.Thread(target=self._io_loop, name="rnsfips-tunnel-io", daemon=True)
         t2 = threading.Thread(target=self._supervisor, name="rnsfips-tunnel-sup", daemon=True)
@@ -495,7 +499,9 @@ class Tunnel:
 
     def add_peer(self, dest_hash: bytes) -> bool:
         with self.lock:
-            if dest_hash in self.peers or dest_hash == self.destination.hash:
+            if dest_hash == self.destination.hash:
+                raise ValueError("that is this tunnel's own destination hash; add the remote tunnel's")
+            if dest_hash in self.peers:
                 return False
             self.peers[dest_hash] = Peer(self, dest_hash, initiator=True)
         return True

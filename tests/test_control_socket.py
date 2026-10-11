@@ -48,3 +48,4 @@ def test_second_instance_refuses_live_socket(tmp_path):
     finally:
         t._stop.set()
         srv.close()
+

@@ -134,6 +134,9 @@ def test_fips_frames_cross_the_tunnel(rig, mdu_override):
     assert control_query("remove_peer", {"dest": "00" * 16}, socket_path=sock_a) == {"changed": False}
     with pytest.raises(RuntimeError):
         control_query("bogus", socket_path=sock_a)
+    # A tunnel's own destination hash is a configuration mistake, not a peer.
+    with pytest.raises(RuntimeError, match="own destination"):
+        control_query("add_peer", {"dest": st["destination"]}, socket_path=sock_a)
 
 
 def test_inbound_link_refused_when_not_allowed(rig):
