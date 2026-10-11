@@ -59,6 +59,15 @@ mesh.
 - Reticulum ignores a re-announce emitted in the same second as the previous
   one, and its logs are block-buffered when stdout is a file
   (`PYTHONUNBUFFERED=1`).
+- `drop_no_port` in `fipsctl show native-flows` counts every datagram that
+  reaches the node for a port nobody holds, from any peer. On the public mesh
+  other nodes' native-API traffic lands there too (seen: a third node sending
+  to port 7368 every few seconds). A growing counter is only a bridge problem
+  if `rnsfips status` also shows a peer down or a flow missing; the daemon's
+  `fips::node::handlers::session=debug` filter names the source and port.
+- After an rnsd restart the surviving side replaces the dead flow as soon as
+  the restarted peer's HELLO (new nonce) arrives; before that fix it waited
+  out the 60 s silence timeout while the restarted side sent into the void.
 - FIPS builds before commit 55fb970 cannot complete discovery for a native
   flow to a multi-hop peer without the key in their identity cache; the
   interface's `fips_dns` priming covers that and is harmless on master.
