@@ -226,6 +226,9 @@ def _tunnel_view(socket_path: str | None) -> dict:
         return {"error": f"no tunnel control socket at {path} (tunnel not running?)"}
     try:
         return control_query("status", socket_path=path)
+    except ConnectionRefusedError:
+        return {"error": f"stale control socket at {path}: the tunnel that created it is gone "
+                         "(killed without cleanup, or a second tunnel took the path); restart the tunnel"}
     except Exception as e:
         return {"error": f"{type(e).__name__}: {e}"}
 

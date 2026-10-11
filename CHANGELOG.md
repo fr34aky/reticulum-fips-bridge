@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.3 (2026-10-11)
+
+- Tunnel: a second `rnsfips tunnel` on the same control socket path now exits
+  with a clear message instead of silently taking the socket over from the
+  running one (which left `rnsfips status` with "connection refused" once the
+  second instance was killed). A stale socket file left by a killed tunnel is
+  still replaced.
+- Tunnel: SIGTERM and SIGHUP shut down cleanly and remove the control socket,
+  so `systemctl stop` no longer leaves a stale file.
+- `rnsfips status` explains a stale control socket instead of printing the
+  raw `ConnectionRefusedError`.
+- README: install from the checkout; `rnsfips` is not on PyPI.
+
 ## 0.1.2 (2026-10-11)
 
 - Tunnel: the responder sends its HELLO only after the initiator has

@@ -21,6 +21,7 @@ from __future__ import annotations
 import configparser
 import os
 import selectors
+import signal
 import socket
 import threading
 import time
@@ -552,7 +553,9 @@ class _ControlServer(threading.Thread):
         self.path = path
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if os.path.exists(path):
-            os.unlink(path)
+            if control_socket_alive(path):
+                raise RuntimeError(f"another rnsfips tunnel is already serving {path}")
+            os.unlink(path)  # stale: left by a tunnel that died without cleanup
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.bind(path)
         os.chmod(path, 0o660)
@@ -611,6 +614,19 @@ def _jsonable(value):
     if isinstance(value, (list, tuple)):
         return [_jsonable(v) for v in value]
     return value
+
+
+def control_socket_alive(path: str, timeout: float = 1.0) -> bool:
+    """True when a process is listening on ``path``; False for a missing or stale socket file."""
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.settimeout(timeout)
+        s.connect(path)
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
 
 
 def control_query(command: str, params: dict | None = None, socket_path: str | None = None, timeout: float = 5.0) -> dict:
@@ -689,12 +705,18 @@ def main(args) -> int:
         os.sys.stdout.reconfigure(line_buffering=True)
     except (AttributeError, ValueError):
         pass
-    tunnel = Tunnel(config, reticulum).start()
     try:
-        while True:
-            time.sleep(60)
-    except KeyboardInterrupt:
-        tunnel.stop()
+        tunnel = Tunnel(config, reticulum).start()
+    except RuntimeError as e:
+        print(f"rnsfips tunnel: {e}", file=os.sys.stderr)
+        return 4
+    stop = threading.Event()
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(sig, lambda *_: stop.set())
+    # A plain exit would leave the control socket file behind and make
+    # `rnsfips status` report "connection refused" instead of "not running".
+    stop.wait()
+    tunnel.stop()
     return 0
 
 
