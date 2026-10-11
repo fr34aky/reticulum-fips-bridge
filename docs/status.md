@@ -63,6 +63,10 @@ mesh.
 - Reticulum links from the home node to both VM destinations establish in
   about 50 ms, link RTT 46 to 49 ms, link MTU 1169 (MDU 1087), unchanged from
   the direct-peer case apart from a few milliseconds.
+- A 300 KB `rncp` transfer from the home node to a listener on the VM over
+  this path completed at 2.18 Mbps (the direct-peer Phase 1 run did 1.3 Mbps;
+  the public mesh hop to the third machine is simply a better route than the
+  old direct UDP peering was).
 - Pitfall found on the way: a `[[FIPS]]` block whose `peers` line is
   commented out starts with "0 configured peer(s)" and silently refuses the
   other side's flow. Since commit 40c1e1e the refusal is a warning.
