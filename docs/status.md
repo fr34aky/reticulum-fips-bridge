@@ -37,6 +37,22 @@ mesh.
   over the Phase 1 FIPS interface (FIPS over Reticulum over FIPS). The
   isolated daemon never saw anything but a loopback UDP peer.
 
+### Phase 2, second run: three real nodes, VM reachable only over Reticulum
+
+- A third machine (FIPS node on the public mesh, rnsd with a TCP client
+  interface to the VM's rnsd, `rnsfips tunnel` with `auto_peer = yes`) learned
+  the VM's tunnel from one `rnsfips tunnel-ctl announce` on the VM and dialled
+  it; the link came up with MDU 16303 over the TCP hop.
+- The VM's FIPS daemon was then stripped of static peers and Nostr rendezvous,
+  so its only peer is the third machine's npub via `127.0.0.1:<shim port>`
+  (`direction: inbound`, `is_parent: true`, tree depth 3).
+- `fipsctl probe` from the VM to the home node's main FIPS daemon: session
+  already present, 43 ms round trip, four-hop tree route through the tunnel
+  peer, path MTU 1280. The VM joined the mesh with no FIPS transport but the
+  Reticulum tunnel.
+- Tunnel counters on both ends climb with FIPS heartbeats and bloom announces
+  (tx 150 / rx 198 on the VM after a few minutes, no drops).
+
 ### Phase 3: operations
 
 - `rnsfips status` identified a hollow rnsd on the VM (started beside a
