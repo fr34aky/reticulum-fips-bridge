@@ -50,6 +50,19 @@ pip install rns rnsfips            # or: pip install -e . from this checkout
 rnsfips install-interface          # writes ~/.reticulum/interfaces/FIPSInterface.py (shim from the package)
 ```
 
+`rnsd` must run in the same Python environment as `rnsfips`, because Reticulum
+imports the interface inside its own interpreter. With pipx, install once and
+expose Reticulum's tools from that venv rather than installing `rns` separately:
+
+```sh
+pipx install rnsfips               # or: pipx install /path/to/this/checkout
+pipx inject rnsfips rns --include-apps
+readlink -f "$(command -v rnsd)"   # must point into .../pipx/venvs/rnsfips/
+```
+
+If `~/.reticulum/config` does not exist yet, run `rnsd` once to create it (or
+`rnsd --exampleconfig > ~/.reticulum/config`) and set `enable_transport = yes`.
+
 Enable the native API on the FIPS daemon (`/etc/fips/fips.yaml`) and restart it:
 
 ```yaml

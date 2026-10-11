@@ -33,6 +33,36 @@ def _shim_source() -> str:
     return path
 
 
+def _check_rnsd_interpreter() -> None:
+    """Warn when the rnsd on PATH runs in an interpreter that cannot import rnsfips.
+
+    Reticulum loads the shim inside rnsd's own interpreter, so rnsfips must be
+    installed there. A separate pipx venv for `rns` is the usual way to get
+    this wrong.
+    """
+    rnsd = shutil.which("rnsd")
+    if not rnsd:
+        print("note: no rnsd on PATH. With pipx, run: pipx inject rnsfips rns --include-apps", file=sys.stderr)
+        return
+    interpreter = None
+    try:
+        with open(rnsd, "rb") as f:
+            first = f.readline().decode("utf-8", "replace").strip()
+        if first.startswith("#!"):
+            interpreter = first[2:].split()[0]
+    except OSError:
+        pass
+    if not interpreter or interpreter == sys.executable:
+        return
+    import subprocess
+
+    rc = subprocess.run([interpreter, "-c", "import rnsfips"], capture_output=True).returncode
+    if rc != 0:
+        print(f"WARNING: {rnsd} runs in {interpreter}, which cannot import rnsfips; the interface will not load there.\n"
+              f"         Install rnsfips into that environment, or expose rnsd from this one "
+              f"(pipx: pipx inject rnsfips rns --include-apps --force; pipx uninstall rns).", file=sys.stderr)
+
+
 def cmd_install_interface(args) -> int:
     configdir = os.path.expanduser(args.configdir)
     ifdir = os.path.join(configdir, "interfaces")
@@ -40,8 +70,14 @@ def cmd_install_interface(args) -> int:
     dest = os.path.join(ifdir, "FIPSInterface.py")
     shutil.copyfile(_shim_source(), dest)
     print(f"installed {dest}")
-    print("add this to the [interfaces] section of", os.path.join(configdir, "config"), ":\n")
+    config = os.path.join(configdir, "config")
+    if os.path.exists(config):
+        print(f"add this to the [interfaces] section of {config}:\n")
+    else:
+        print(f"{config} does not exist yet: run rnsd once to create it (or `rnsd --exampleconfig > {config}`),\n"
+              f"set enable_transport = yes, then add this to its [interfaces] section:\n")
     print(SAMPLE_CONFIG)
+    _check_rnsd_interpreter()
     return 0
 
 
