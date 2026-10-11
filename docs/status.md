@@ -53,6 +53,20 @@ mesh.
 - Tunnel counters on both ends climb with FIPS heartbeats and bloom announces
   (tx 150 / rx 198 on the VM after a few minutes, no drops).
 
+### Phase 1 over Phase 2: Reticulum over FIPS over Reticulum over FIPS
+
+- With the VM's FIPS reachable only through the third machine's tunnel, the
+  VM's `[[FIPS]]` interface was re-enabled. The home bridge's native flow to
+  the VM now crosses the public mesh to the third machine and the tunnel into
+  the VM; FIPS discovery resolved the VM at depth 4 and the flow came up on
+  the first HELLO exchange.
+- Reticulum links from the home node to both VM destinations establish in
+  about 50 ms, link RTT 46 to 49 ms, link MTU 1169 (MDU 1087), unchanged from
+  the direct-peer case apart from a few milliseconds.
+- Pitfall found on the way: a `[[FIPS]]` block whose `peers` line is
+  commented out starts with "0 configured peer(s)" and silently refuses the
+  other side's flow. Since commit 40c1e1e the refusal is a warning.
+
 ### Phase 3: operations
 
 - `rnsfips status` identified a hollow rnsd on the VM (started beside a
