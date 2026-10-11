@@ -101,6 +101,20 @@ Interface options:
 | `ping_interval` / `peer_timeout` | 15 / 60 s | bridge-level liveness, since FIPS flows have no far-end close |
 | `mtu` | computed | cap the interface MTU below what the FIPS flow allows |
 | `fips_dns` | `[::1]:5354` | FIPS `.fips` resolver used to prime the daemon's identity cache before dialing; `off` to disable |
+| `announce` | yes | announce this bridge over Reticulum (`rnsfips.bridge` destination) so other bridges can discover it |
+| `announce_interval` | 3600 s | re-announce period; a fresh announce also goes out shortly after a new peer comes up |
+| `auto_peer` | no | dial bridges learned from announces, and accept their inbound flows |
+
+### Discovery
+
+Every interface announces a small Reticulum destination carrying its FIPS npub,
+its port, and the bridges it already knows. A new site therefore needs only
+**one** existing bridge in `peers`; with `auto_peer = yes` it learns the rest
+from that peer's announce and dials them directly over FIPS, and existing
+sites learn the newcomer the same way. Discovery rides on Reticulum
+connectivity, so it never replaces the first configured peer. Learned bridges
+are listed by `rnsfips status`. Leave `auto_peer` off on bridges that should
+only talk to an explicit `peers`/`allow` list.
 
 All standard Reticulum interface options (`mode`, `network_name`,
 `passphrase`, `announce_cap`, `bitrate`, `outgoing`, ...) apply and are inherited

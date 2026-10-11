@@ -21,13 +21,12 @@ from dataclasses import dataclass, field
 
 
 def fake_npub(seed: str) -> str:
-    """Deterministic npub-looking identifier (bech32-ish, 63 chars)."""
+    """Deterministic, valid npub (bech32 of a 32-byte key derived from the seed)."""
     import hashlib
 
-    h = hashlib.sha512(seed.encode()).hexdigest()
-    alphabet = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
-    body = "".join(alphabet[int(h[i:i + 2], 16) % 32] for i in range(0, 116, 2))
-    return "npub1" + body
+    from rnsfips.bech32 import bytes_to_npub
+
+    return bytes_to_npub(hashlib.sha256(seed.encode()).digest())
 
 
 class Mesh:

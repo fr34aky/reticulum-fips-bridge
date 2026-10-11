@@ -208,7 +208,11 @@ def _reticulum_view() -> dict:
         if i.get("type") not in ("FIPSInterface", "FIPSPeerInterface"):
             continue
         ifaces.append({k: i.get(k) for k in ("name", "type", "status", "mtu", "mode", "rxb", "txb", "clients", "peers")})
-    return {"interfaces": ifaces, "transport_id": stats.get("transport_id").hex() if stats.get("transport_id") else None}
+    from .discovery import load_state
+
+    discovered = load_state(RNS.Reticulum.storagepath).get("bridges", {})
+    return {"interfaces": ifaces, "transport_id": stats.get("transport_id").hex() if stats.get("transport_id") else None,
+            "discovered_bridges": discovered}
 
 
 def _fips_view(control_socket: str | None) -> dict:
@@ -290,6 +294,11 @@ def cmd_status(args) -> int:
             up = "up" if i["status"] else "down"
             extra = f"  clients={i['clients']}" if i["type"] == "FIPSInterface" else ""
             print(f"  {i['name']}  {up}  mtu={i['mtu']}  mode={_mode_name(i['mode'])}  rx={_fmt_bytes(i['rxb'])} tx={_fmt_bytes(i['txb'])}{extra}")
+        import time as _time
+
+        for npub, d in sorted(r.get("discovered_bridges", {}).items(), key=lambda kv: -float(kv[1].get("seen", 0))):
+            age = _time.time() - float(d.get("seen", 0))
+            print(f"  discovered bridge {npub}  port={d.get('port')}  seen {age/60:.0f} min ago")
 
     t = view["tunnel"]
     print("Tunnel (rnsfips tunnel)")

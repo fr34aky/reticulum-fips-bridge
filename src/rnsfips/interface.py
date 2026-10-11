@@ -41,6 +41,7 @@ from . import __version__
 from . import envelope as env
 from .fipsapi import DEFAULT_PORT, FipsApi, FipsApiError, Flow, FlowClosed, Listener, default_socket_path
 from .fipsdns import DEFAULT_DNS, resolve_npub
+from . import discovery
 
 HELLO_TIMEOUT = 10.0
 MIN_HW_MTU = RNS.Reticulum.MTU
@@ -127,6 +128,17 @@ class FIPSInterface(Interface):
         # flow to a multi-hop peer can complete discovery. "off" disables it.
         self.fips_dns = str(c.get("fips_dns", DEFAULT_DNS)).strip()
         self._primed: set[str] = set()
+        # Discovery: announce this bridge over Reticulum and learn others.
+        self.announce_enabled = _as_bool(c.get("announce"), True)
+        self.announce_interval = float(c.get("announce_interval", 3600))
+        self.auto_peer = _as_bool(c.get("auto_peer"), False)
+        self.discovered: dict[str, dict] = {}   # npub -> {port, seen, via, tid}
+        self.dynamic_peers: dict[str, int] = {}  # discovered npubs we dial (auto_peer)
+        self._bridge_identity = None
+        self._bridge_destination = None
+        self._last_announce = 0.0
+        self._announce_due = False
+        self._announce_handler = None
 
         if self.listen_port < 1024 or self.listen_port > 65535:
             raise ValueError(f"listen_port {self.listen_port} is outside the application port tier 1024-65535")
@@ -258,7 +270,19 @@ class FIPSInterface(Interface):
         return hw
 
     def _allowed(self, npub: str) -> bool:
-        return self.accept_unknown or npub in self.peer_specs or npub in self.allow
+        if self.accept_unknown or npub in self.peer_specs or npub in self.allow:
+            return True
+        return self.auto_peer and npub in self.discovered
+
+    def _dial_targets(self) -> dict[str, int]:
+        targets = dict(self.dynamic_peers)
+        targets.update(self.peer_specs)
+        return targets
+
+    @property
+    def local_npub(self) -> str | None:
+        listener = self._listener
+        return listener.node if listener is not None else None
 
     def _hello_bytes(self, flow: Flow) -> bytes:
         tid = getattr(RNS.Transport, "identity", None)
@@ -299,9 +323,10 @@ class FIPSInterface(Interface):
                     RNS.log(f"{self} cannot hold FIPS port {self.listen_port} via {self._api.socket_path}: {e.errno_name} {e.message}. Retrying.", RNS.LOG_WARNING)
                     self._api_warned = True
                 return
+        self._maybe_announce(now)
         with self.lock:
             targets = [
-                (npub, port) for npub, port in self.peer_specs.items()
+                (npub, port) for npub, port in self._dial_targets().items()
                 if npub not in self.peers and npub not in self._dialing
                 and not any(pf.npub == npub for pf in self._flows.values())
                 and self._backoff.get(npub, (0, 0))[0] <= now
@@ -320,6 +345,66 @@ class FIPSInterface(Interface):
                 RNS.log(f"{self} cannot open flow to {npub[:16]}…: {e.errno_name} {e.message}", RNS.LOG_DEBUG)
                 with self.lock:
                     self._dialing.discard(npub)
+
+    # ---- discovery over Reticulum announces -------------------------------------
+
+    def _maybe_announce(self, now: float):
+        if not self.announce_enabled or self.local_npub is None:
+            return
+        if not getattr(RNS.Transport, "ready", False):
+            return
+        if self._bridge_destination is None:
+            try:
+                path = os.path.join(RNS.Reticulum.identitypath, "rnsfips_bridge")
+                identity = RNS.Identity.from_file(path) if os.path.isfile(path) else None
+                if identity is None:
+                    identity = RNS.Identity()
+                    identity.to_file(path)
+                self._bridge_identity = identity
+                self._bridge_destination = RNS.Destination(
+                    identity, RNS.Destination.IN, RNS.Destination.SINGLE, discovery.APP_NAME, discovery.ASPECT)
+                self._bridge_destination.set_proof_strategy(RNS.Destination.PROVE_NONE)
+                self._announce_handler = _BridgeAnnounceHandler(self)
+                RNS.Transport.register_announce_handler(self._announce_handler)
+                RNS.log(f"{self} bridge destination {RNS.prettyhexrep(self._bridge_destination.hash)}", RNS.LOG_VERBOSE)
+            except Exception as e:
+                RNS.log(f"{self} cannot set up discovery: {e}", RNS.LOG_ERROR)
+                self.announce_enabled = False
+                return
+        due = (now - self._last_announce) > self.announce_interval
+        if self._announce_due and (now - self._last_announce) > 30:
+            due = True
+        if not due:
+            return
+        tid = getattr(RNS.Transport, "identity", None)
+        try:
+            app_data = discovery.encode_app_data(self.local_npub, self.listen_port, tid.hash if tid else None, self.discovered)
+        except ValueError as e:
+            RNS.log(f"{self} cannot encode bridge announce ({e}); discovery disabled", RNS.LOG_ERROR)
+            self.announce_enabled = False
+            return
+        self._bridge_destination.announce(app_data=app_data)
+        self._last_announce = now
+        self._announce_due = False
+
+    def learn_bridge(self, npub: str, port: int, via: bytes | None, tid: bytes | None = None):
+        """Record a bridge seen in an announce; dial it when auto_peer is on."""
+        if npub == self.local_npub:
+            return
+        now = time.time()
+        with self.lock:
+            entry = self.discovered.get(npub) or {}
+            entry.update({"port": port, "seen": now, "via": via.hex() if via else entry.get("via")})
+            if tid:
+                entry["tid"] = tid.hex()
+            self.discovered[npub] = entry
+            new = self.auto_peer and npub not in self.peer_specs and npub not in self.dynamic_peers
+            if new:
+                self.dynamic_peers[npub] = port
+        if new:
+            RNS.log(f"{self} discovered bridge {npub[:16]}… port {port}; dialling", RNS.LOG_VERBOSE)
+            self._announce_due = True
+        discovery.save_state(RNS.Reticulum.storagepath, self.discovered)
 
     def _prime_identity(self, npub: str):
         if self.fips_dns.lower() in ("off", "no", "false", "") or npub in self._primed:
@@ -522,10 +607,11 @@ class FIPSInterface(Interface):
             self.peers[npub] = pf
             self._backoff.pop(npub, None)
         child.attach_flow(pf.flow, hw_mtu)
+        self._announce_due = True
         RNS.log(f"{child} up (MTU {hw_mtu}, {'dialled' if pf.initiator else 'accepted'}, impl {hello.get('impl')} {hello.get('ver')})", RNS.LOG_VERBOSE)
 
     def _spawn_child(self, npub: str) -> "FIPSPeerInterface":
-        child = FIPSPeerInterface(self, npub, configured=npub in self.peer_specs)
+        child = FIPSPeerInterface(self, npub, configured=npub in self.peer_specs or npub in self.dynamic_peers)
         child.OUT = self.OUT
         child.IN = self.IN
         child.ingress_control = self.ingress_control
@@ -593,7 +679,7 @@ class FIPSInterface(Interface):
                 child.teardown()
         elif not pf.established:
             RNS.log(f"{self} flow to {npub[:16]}… dropped before HELLO: {reason}", RNS.LOG_DEBUG)
-        if npub in self.peer_specs:
+        if npub in self.peer_specs or npub in self.dynamic_peers:
             self._schedule_retry(npub)
 
     def _liveness(self):
@@ -701,3 +787,21 @@ class FIPSPeerInterface(Interface):
 
     def __str__(self):
         return f"FIPSPeerInterface[{self.parent_interface.name}/{self.npub}]"
+
+
+class _BridgeAnnounceHandler:
+    """Learns other bridges from their ``rnsfips.bridge`` announces."""
+
+    def __init__(self, interface: FIPSInterface):
+        self.interface = interface
+        self.aspect_filter = f"{discovery.APP_NAME}.{discovery.ASPECT}"
+        self.receive_path_responses = True
+
+    def received_announce(self, destination_hash, announced_identity, app_data):
+        info = discovery.decode_app_data(app_data)
+        if info is None:
+            return
+        iface = self.interface
+        iface.learn_bridge(info["npub"], info["port"], destination_hash, info["tid"])
+        for npub, port in info["bridges"]:
+            iface.learn_bridge(npub, port, None)
