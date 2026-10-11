@@ -181,9 +181,9 @@ class Peer:
     def _to_fips(self, frame: bytes):
         if self.sock is None:
             return
+        self.rx_frames += 1
         try:
             self.sock.sendto(frame, self.fips_addr)
-            self.rx_frames += 1
         except OSError as e:
             RNS.log(f"tunnel {self.label}: cannot write to FIPS at {self.fips_addr}: {e}", RNS.LOG_DEBUG)
 

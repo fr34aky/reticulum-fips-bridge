@@ -110,8 +110,8 @@ def test_fips_frames_cross_the_tunnel(rig, mdu_override):
     data, _ = rig["udp_a"].recvfrom(65535)
     assert data == frame[::-1]
 
-    st = a.cmd("tunnel_status")
-    assert st["peers"][0]["tx_frames"] >= 1 and st["peers"][0]["rx_frames"] >= 2
+    # Counters are updated after the datagram is written, so wait for them.
+    assert a.wait_for(lambda: (lambda p: p["tx_frames"] >= 1 and p["rx_frames"] >= 2)(a.cmd("tunnel_status")["peers"][0]), timeout=5)
 
     # Announces carry the npub binding; a re-announce from B is seen by A's handler.
     # (Reticulum ignores an announce emitted in the same second as the last one, so retry.)
