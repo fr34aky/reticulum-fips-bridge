@@ -2,6 +2,7 @@
 
 import os
 import socket
+import time
 
 import pytest
 
@@ -152,3 +153,52 @@ def test_inbound_link_refused_when_not_allowed(rig):
         assert not any(p["up"] for p in b.cmd("tunnel_status")["peers"])
     assert not rig["ctl_a"].connects()
     assert not rig["ctl_b"].connects()
+
+
+
+def _one_link_each(a, b, up):
+    """Exactly one up link per side, with consistent roles, that is not redialled."""
+    assert a.wait_for(lambda: len(up(a, fake_npub("fips-b"))) == 1 and len(up(b, fake_npub("fips-a"))) == 1, timeout=30), \
+        a.log()[-2000:] + b.log()[-2000:]
+    time.sleep(6)  # longer than reconnect_wait: the loser must not be redialled
+    ra, rb = up(a, fake_npub("fips-b")), up(b, fake_npub("fips-a"))
+    assert len(ra) == 1 and len(rb) == 1
+    assert ra[0]["initiator"] != rb[0]["initiator"]
+    return ra[0], rb[0]
+
+
+def _up(site, npub):
+    return [p for p in site.cmd("tunnel_status")["peers"] if p["up"] and p["npub"] == npub]
+
+
+def test_mutual_dial_keeps_one_link(rig):
+    """B is added as a peer of A first; A then adds B. The second dial is never made."""
+    a, b = rig["a"], rig["b"]
+    tb = start_tunnel(b, rig["ctl_b"], rig["udp_b"])
+    ta = start_tunnel(a, rig["ctl_a"], rig["udp_a"], peers=tb["dest"])
+    assert a.wait_for(lambda: _up(a, fake_npub("fips-b")), timeout=40), a.log()[-3000:]
+    assert b.cmd("tunnel_ctl", command="add_peer", params={"dest": ta["dest"]})["changed"] is True
+    ra, rb = _one_link_each(a, b, _up)
+    assert ra["initiator"] and not rb["initiator"]  # A's existing link stands; B never dialled
+    rig["udp_a"].sendto(b"\x55" * 600, ("127.0.0.1", ra["udp_port"]))
+    data, _ = rig["udp_b"].recvfrom(2048)
+    assert data == b"\x55" * 600
+
+
+def test_simultaneous_dial_keeps_one_link(rig):
+    """Both sides dial at once: the link initiated by the smaller destination hash survives."""
+    a, b = rig["a"], rig["b"]
+    tb = start_tunnel(b, rig["ctl_b"], rig["udp_b"])
+    ta = start_tunnel(a, rig["ctl_a"], rig["udp_a"])
+    # Prime paths so both dials go out on the next supervisor tick.
+    a.cmd("tunnel_announce"); b.cmd("tunnel_announce")
+    time.sleep(2)
+    a.cmd("tunnel_ctl", command="add_peer", params={"dest": tb["dest"]})
+    b.cmd("tunnel_ctl", command="add_peer", params={"dest": ta["dest"]})
+    ra, rb = _one_link_each(a, b, _up)
+    if "duplicate" in a.log() + b.log():  # both dials raced: the deterministic rule must have decided
+        smaller_is_a = bytes.fromhex(ta["dest"]) < bytes.fromhex(tb["dest"])
+        assert ra["initiator"] == smaller_is_a and rb["initiator"] == (not smaller_is_a)
+    rig["udp_b"].sendto(b"\x66" * 600, ("127.0.0.1", rb["udp_port"]))
+    data, _ = rig["udp_a"].recvfrom(2048)
+    assert data == b"\x66" * 600

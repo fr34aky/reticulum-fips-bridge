@@ -145,6 +145,8 @@ def main():
             return {"dest": t.destination.hash.hex(), "npub": t.npub}
         if op == "tunnel_status":
             return state["tunnel"].status()
+        if op == "tunnel_ctl":
+            return state["tunnel"].control_command(cmd["command"], cmd.get("params") or {})
         if op == "tunnel_announce":
             state["tunnel"].announce()
             return {}

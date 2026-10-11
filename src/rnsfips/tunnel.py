@@ -344,6 +344,9 @@ class Tunnel:
             peer.close()
             return
         peer.identified = True
+        self._dedupe(dest_hash)
+        if peer.link is None:
+            return  # lost the dedupe
         peer.send_hello()
         if peer.pending_hello is not None:
             hello, peer.pending_hello = peer.pending_hello, None
@@ -370,10 +373,35 @@ class Tunnel:
                 if peer.up and now - peer.last_connect > self.config.connect_refresh:
                     self.fips_connect(peer)
                 continue
+            if self._inbound_from(peer.dest_hash):
+                continue  # the remote dialled us and that link is up: one link per pair is enough
             next_try, _ = self._backoff.get(peer.dest_hash, (0, 0))
             if now < next_try:
                 continue
             self._dial(peer)
+
+    def _inbound_from(self, dest_hash: bytes) -> list[Peer]:
+        with self.lock:
+            return [p for p in self.inbound.values()
+                    if p.dest_hash == dest_hash and p.identified and p.link is not None
+                    and p.link.status == RNS.Link.ACTIVE]
+
+    def _dedupe(self, dest_hash: bytes) -> None:
+        """Both ends dialled each other and both links are up: keep the link that the
+        tunnel with the smaller destination hash initiated. Both sides apply the same
+        rule, so they agree on which link survives."""
+        with self.lock:
+            out = self.peers.get(dest_hash)
+        ins = self._inbound_from(dest_hash)
+        if out is None or out.link is None or out.link.status != RNS.Link.ACTIVE or not ins:
+            return
+        if self.destination.hash < dest_hash:
+            for p in ins:
+                RNS.log(f"tunnel {p.label}: dropping duplicate inbound link, our dial wins", RNS.LOG_VERBOSE)
+                p.close()
+        else:
+            RNS.log(f"tunnel {out.label}: dropping our duplicate link, the remote's dial wins", RNS.LOG_VERBOSE)
+            out.close()
 
     def _dial(self, peer: Peer):
         h = peer.dest_hash
@@ -396,6 +424,9 @@ class Tunnel:
     def _on_established(self, peer: Peer, link: RNS.Link):
         if peer.link is not link:
             return
+        self._dedupe(peer.dest_hash)
+        if peer.link is not link:
+            return  # lost the dedupe
         link.identify(self.identity)
         peer.send_hello()
         self._backoff.pop(peer.dest_hash, None)
