@@ -1,0 +1,16 @@
+[Unit]
+Description=rnsfips tunnel (FIPS over Reticulum)
+After=rnsd.service fips.service
+Requires=rnsd.service
+
+[Service]
+Environment=PYTHONUNBUFFERED=1
+# Wait for the rnsd shared instance; a tunnel started earlier would become
+# its own Reticulum instance instead of a client of rnsd.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do /usr/local/bin/rnstatus >/dev/null 2>&1 && exit 0; sleep 1; done; echo "rnsd shared instance not reachable" >&2; exit 1'
+ExecStart=/usr/local/bin/rnsfips tunnel --config /etc/rnsfips/tunnel.conf -v
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

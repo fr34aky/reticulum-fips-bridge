@@ -1,0 +1,12 @@
+[Unit]
+Description=Reticulum Network Stack daemon (rnsd)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/rnsd -v
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

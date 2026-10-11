@@ -137,6 +137,25 @@ packets. FIPS's timers (10 s heartbeats, 30 s link-dead) suit internet-class
 Reticulum paths; LoRa-class paths are experimental, see
 [docs/design.md](docs/design.md#fips-over-reticulum).
 
+## Running as services
+
+`rnsfips install-units` writes systemd user units for `rnsd` (with the FIPS
+interface) and for the tunnel, using the executables of the environment it runs
+from. Reference copies are in [systemd/](systemd/).
+
+```sh
+rnsfips install-units                 # ~/.config/systemd/user/{rnsd,rnsfips-tunnel}.service
+systemctl --user daemon-reload
+systemctl --user enable --now rnsd.service
+systemctl --user enable --now rnsfips-tunnel.service   # only where ~/.config/rnsfips/tunnel.conf exists
+loginctl enable-linger "$USER"        # keep user services running without a login session
+```
+
+The tunnel unit requires `rnsd.service` and waits for its shared instance to
+answer before starting, because a tunnel started first would become its own
+Reticulum instance. `sudo rnsfips install-units --system` writes system units to
+`/etc/systemd/system` instead (tunnel config at `/etc/rnsfips/tunnel.conf`).
+
 ## Development
 
 ```sh
