@@ -55,6 +55,7 @@ class TunnelConfig:
         self.npub = kw.get("npub") or None  # normally read from the FIPS daemon
         self.mdu_override = int(kw.get("mdu_override", 0) or 0)
         self.frag_timeout = float(kw.get("frag_timeout", 5))
+        self.control_socket = kw.get("control_socket") or default_control_socket()
 
     @classmethod
     def from_file(cls, path: str) -> "TunnelConfig":
@@ -63,6 +64,14 @@ class TunnelConfig:
             cp.read_file(f)
         section = cp["tunnel"] if cp.has_section("tunnel") else cp["DEFAULT"]
         return cls(**dict(section))
+
+
+def default_control_socket() -> str:
+    """Short path for the tunnel's own control socket (Unix socket paths are length-limited)."""
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        return os.path.join(xdg, "rnsfips", "tunnel.sock")
+    return f"/tmp/rnsfips-tunnel-{os.getuid()}.sock"
 
 
 def _split(value) -> list[str]:
@@ -252,11 +261,21 @@ class Tunnel:
         self._threads = [t1, t2]
         t1.start()
         t2.start()
+        self._control = None
+        if str(self.config.control_socket).lower() not in ("off", "no", "false", ""):
+            try:
+                self._control = _ControlServer(self, self.config.control_socket)
+                self._control.start()
+                self._threads.append(self._control)
+            except OSError as e:
+                RNS.log(f"rnsfips tunnel: cannot open control socket {self.config.control_socket}: {e}", RNS.LOG_WARNING)
         return self
 
     def stop(self):
         self._stop.set()
         self._wake()
+        if getattr(self, "_control", None) is not None:
+            self._control.close()
         with self.lock:
             for p in list(self.peers.values()) + list(self.inbound.values()):
                 p.close()
@@ -463,6 +482,42 @@ class Tunnel:
             for peer in list(self._by_sock.values()):
                 peer.reassembler.expire()
 
+    # ---- control commands ----------------------------------------------------------
+
+    def add_peer(self, dest_hash: bytes) -> bool:
+        with self.lock:
+            if dest_hash in self.peers or dest_hash == self.destination.hash:
+                return False
+            self.peers[dest_hash] = Peer(self, dest_hash, initiator=True)
+        return True
+
+    def remove_peer(self, dest_hash: bytes) -> bool:
+        with self.lock:
+            peer = self.peers.pop(dest_hash, None)
+        if peer is None:
+            return False
+        peer.initiator = False  # no reconnect from the close callback
+        peer.close()
+        self._backoff.pop(dest_hash, None)
+        return True
+
+    def control_command(self, command: str, params: dict) -> dict:
+        if command == "status":
+            return self.status()
+        if command == "announce":
+            self.announce()
+            return {"announced": True}
+        if command in ("add_peer", "remove_peer"):
+            try:
+                dest = bytes.fromhex(params["dest"])
+            except (KeyError, ValueError, TypeError):
+                raise ValueError("params.dest must be a 32-hex-digit destination hash")
+            if len(dest) != 16:
+                raise ValueError("params.dest must be a 16-byte destination hash")
+            changed = self.add_peer(dest) if command == "add_peer" else self.remove_peer(dest)
+            return {"changed": changed}
+        raise ValueError(f"unknown command {command!r}")
+
     # ---- status ---------------------------------------------------------------------
 
     def status(self) -> dict:
@@ -478,6 +533,100 @@ class Tunnel:
             } for p in peers],
             "discovered": {h.hex(): d for h, d in self._discovered.items()},
         }
+
+
+class _ControlServer(threading.Thread):
+    """JSON-line control socket, same shape as the FIPS control socket: one request per connection."""
+
+    def __init__(self, tunnel: Tunnel, path: str):
+        super().__init__(name="rnsfips-tunnel-ctl", daemon=True)
+        self.tunnel = tunnel
+        self.path = path
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.exists(path):
+            os.unlink(path)
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.bind(path)
+        os.chmod(path, 0o660)
+        self.sock.listen(8)
+        self.sock.settimeout(0.5)
+
+    def run(self):
+        while not self.tunnel._stop.is_set():
+            try:
+                conn, _ = self.sock.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
+
+    def _serve(self, conn: socket.socket):
+        try:
+            conn.settimeout(5)
+            buf = b""
+            while b"\n" not in buf and len(buf) < 4096:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+            import json
+
+            try:
+                req = json.loads(buf.split(b"\n", 1)[0].decode("utf-8") or "{}")
+                data = self.tunnel.control_command(req.get("command", ""), req.get("params") or {})
+                reply = {"status": "ok", "data": _jsonable(data)}
+            except Exception as e:
+                reply = {"status": "error", "message": f"{type(e).__name__}: {e}"}
+            conn.sendall(json.dumps(reply).encode("utf-8") + b"\n")
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+    def close(self):
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+        try:
+            os.unlink(self.path)
+        except OSError:
+            pass
+
+
+def _jsonable(value):
+    if isinstance(value, bytes):
+        return value.hex()
+    if isinstance(value, dict):
+        return {str(k.hex() if isinstance(k, bytes) else k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    return value
+
+
+def control_query(command: str, params: dict | None = None, socket_path: str | None = None, timeout: float = 5.0) -> dict:
+    """Client side of the tunnel control socket."""
+    import json
+
+    path = socket_path or default_control_socket()
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.settimeout(timeout)
+        s.connect(path)
+        s.sendall(json.dumps({"command": command, "params": params or {}}).encode("utf-8") + b"\n")
+        buf = b""
+        while b"\n" not in buf:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+    finally:
+        s.close()
+    reply = json.loads(buf.split(b"\n", 1)[0].decode("utf-8"))
+    if reply.get("status") != "ok":
+        raise RuntimeError(reply.get("message", "unknown error"))
+    return reply.get("data") or {}
 
 
 class _AnnounceHandler:
@@ -538,4 +687,6 @@ peers =
 allow = any
 # Re-announce interval in seconds
 announce_interval = 1800
+# Control socket for `rnsfips status` / `rnsfips tunnel-ctl` ("off" to disable)
+# control_socket = $XDG_RUNTIME_DIR/rnsfips/tunnel.sock
 """

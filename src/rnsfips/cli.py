@@ -169,24 +169,155 @@ next:
     return 0
 
 
-def cmd_status(args) -> int:
+def _shared_instance_reachable(instance_name: str = "default") -> bool:
+    """Probe rnsd's shared-instance socket without starting a Reticulum instance."""
+    import socket
+
+    if sys.platform.startswith("linux"):
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(1)
+            s.connect(f"\0rns/{instance_name}")
+            s.close()
+            return True
+        except OSError:
+            pass
+    try:
+        s = socket.create_connection(("127.0.0.1", 37428), timeout=1)
+        s.close()
+        return True
+    except OSError:
+        return False
+
+
+def _reticulum_view() -> dict:
+    if not _shared_instance_reachable():
+        return {"error": "rnsd shared instance not reachable"}
+    import RNS
+
+    try:
+        reticulum = RNS.Reticulum(require_shared_instance=True, loglevel=RNS.LOG_ERROR)
+        stats = reticulum.get_interface_stats()
+    except SystemExit:
+        return {"error": "could not connect to the rnsd shared instance"}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+    ifaces = []
+    for i in stats.get("interfaces", []):
+        if i.get("type") not in ("FIPSInterface", "FIPSPeerInterface"):
+            continue
+        ifaces.append({k: i.get(k) for k in ("name", "type", "status", "mtu", "mode", "rxb", "txb", "clients", "peers")})
+    return {"interfaces": ifaces, "transport_id": stats.get("transport_id").hex() if stats.get("transport_id") else None}
+
+
+def _fips_view(control_socket: str | None) -> dict:
     from .fipsctl import FipsControl, FipsControlError
 
-    ctl = FipsControl(args.control_socket)
+    ctl = FipsControl(control_socket)
     try:
         status = ctl.show_status()
         flows = ctl.show_native_flows()
+        peers = ctl.show_peers()
     except FipsControlError as e:
-        print(f"FIPS control socket: {e}", file=sys.stderr)
-        return 1
-    print(f"FIPS node {status.get('npub')} state={status.get('state')} peers={status.get('peer_count')} "
-          f"sessions={status.get('session_count')} ipv6_mtu={status.get('effective_ipv6_mtu')}")
-    listeners = flows.get("listeners", [])
-    print(f"native API listeners: {[l.get('local_port') for l in listeners]}")
-    for f in flows.get("flows", []):
-        print(f"  flow {f.get('flow_id')} {f.get('peer', '')[:20]}… {f.get('local_port')}->{f.get('remote_port')} {f.get('state')} queued={f.get('queued')}")
+        return {"error": str(e)}
+    return {
+        "npub": status.get("npub"), "state": status.get("state"), "version": status.get("version"),
+        "peer_count": status.get("peer_count"), "ipv6_mtu": status.get("effective_ipv6_mtu"),
+        "listeners": [l.get("local_port") for l in flows.get("listeners", [])],
+        "flows": [{k: f.get(k) for k in ("peer", "local_port", "remote_port", "state", "queued")} for f in flows.get("flows", [])],
+        "native_stats": {k: v for k, v in (flows.get("stats") or {}).items() if v},
+        "loopback_peers": [{"npub": p.get("npub"), "addr": p.get("transport_addr"), "connectivity": p.get("connectivity")}
+                           for p in peers if str(p.get("transport_addr", "")).startswith("127.")],
+    }
+
+
+def _tunnel_view(socket_path: str | None) -> dict:
+    from .tunnel import control_query, default_control_socket
+
+    path = socket_path or default_control_socket()
+    if not os.path.exists(path):
+        return {"error": f"no tunnel control socket at {path} (tunnel not running?)"}
+    try:
+        return control_query("status", socket_path=path)
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+def _mode_name(mode):
+    names = {1: "full", 2: "point-to-point", 3: "access-point", 4: "roaming", 5: "boundary", 6: "gateway", 7: "internal"}
+    return names.get(mode, str(mode))
+
+
+def _fmt_bytes(n) -> str:
+    n = n or 0
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+def cmd_status(args) -> int:
+    view = {"fips": _fips_view(args.control_socket), "reticulum": _reticulum_view(), "tunnel": _tunnel_view(args.tunnel_socket)}
     if args.json:
-        print(json.dumps({"status": status, "native_flows": flows}, indent=2))
+        print(json.dumps(view, indent=2, default=str))
+        return 0
+
+    f = view["fips"]
+    print("FIPS node")
+    if "error" in f:
+        print(f"  unavailable: {f['error']}")
+    else:
+        print(f"  {f['npub']}  {f['state']}  {f['version']}  peers={f['peer_count']}  ipv6_mtu={f['ipv6_mtu']}")
+        print(f"  native API listeners: {f['listeners'] or 'none'}")
+        for fl in f["flows"]:
+            print(f"  flow {fl['peer'][:20]}…  {fl['local_port']}->{fl['remote_port']}  {fl['state']}  queued={fl['queued']}")
+        for p in f["loopback_peers"]:
+            print(f"  tunnel peer {p['npub'][:20]}…  via {p['addr']}  {p['connectivity']}")
+        drops = {k: v for k, v in f["native_stats"].items() if k.startswith("drop_")}
+        if drops:
+            print(f"  native drops: {drops}")
+
+    r = view["reticulum"]
+    print("Reticulum (rnsd)")
+    if "error" in r:
+        print(f"  unavailable: {r['error']}")
+    else:
+        if not r["interfaces"]:
+            print("  no FIPS interfaces configured")
+        for i in r["interfaces"]:
+            up = "up" if i["status"] else "down"
+            extra = f"  clients={i['clients']}" if i["type"] == "FIPSInterface" else ""
+            print(f"  {i['name']}  {up}  mtu={i['mtu']}  mode={_mode_name(i['mode'])}  rx={_fmt_bytes(i['rxb'])} tx={_fmt_bytes(i['txb'])}{extra}")
+
+    t = view["tunnel"]
+    print("Tunnel (rnsfips tunnel)")
+    if "error" in t:
+        print(f"  {t['error']}")
+    else:
+        print(f"  destination {t.get('destination')}  for FIPS node {str(t.get('npub'))[:20]}…")
+        for p in t.get("peers", []):
+            state = "up" if p["up"] else "down"
+            who = p["dest"] or "inbound"
+            print(f"  peer {who}  {state}  {'dialled' if p['initiator'] else 'accepted'}  npub={str(p['npub'])[:20]}…  "
+                  f"udp={p['udp_port']}  mdu={p['mdu']}  tx={p['tx_frames']} rx={p['rx_frames']} drops={p['tx_drops']}")
+        for h, d in (t.get("discovered") or {}).items():
+            print(f"  discovered {h}  npub={str(d.get('npub'))[:20]}…  {d.get('impl')} {d.get('ver')}")
+    return 0
+
+
+def cmd_tunnel_ctl(args) -> int:
+    from .tunnel import control_query
+
+    params = {}
+    if args.dest:
+        params["dest"] = args.dest
+    try:
+        data = control_query(args.command, params, socket_path=args.tunnel_socket)
+    except Exception as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(json.dumps(data, indent=2, default=str))
     return 0
 
 
@@ -211,10 +342,17 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--tunnel-config", default=None, help="tunnel config path used by the tunnel unit")
     s.set_defaults(func=cmd_install_units)
 
-    s = sub.add_parser("status", help="show the local FIPS node and native API flows")
-    s.add_argument("--control-socket", default=None)
+    s = sub.add_parser("status", help="show the FIPS node, the Reticulum FIPS interfaces and the tunnel")
+    s.add_argument("--control-socket", default=None, help="FIPS control socket path")
+    s.add_argument("--tunnel-socket", default=None, help="tunnel control socket path")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_status)
+
+    s = sub.add_parser("tunnel-ctl", help="send a command to the running tunnel")
+    s.add_argument("command", choices=["status", "announce", "add_peer", "remove_peer"])
+    s.add_argument("dest", nargs="?", help="destination hash for add_peer/remove_peer")
+    s.add_argument("--tunnel-socket", default=None)
+    s.set_defaults(func=cmd_tunnel_ctl)
 
     s = sub.add_parser("tunnel", help="run the FIPS-over-Reticulum tunnel daemon")
     s.add_argument("--config", default="~/.config/rnsfips/tunnel.conf", help="tunnel configuration file")

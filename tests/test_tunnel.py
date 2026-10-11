@@ -1,5 +1,6 @@
 """FIPS over Reticulum: two tunnels linked across a Reticulum TCP hop, fake FIPS on each side."""
 
+import os
 import socket
 
 import pytest
@@ -54,6 +55,7 @@ def rig(tmp_path):
 
 def start_tunnel(site, ctl, udp, **extra):
     cfg = {
+        "control_socket": os.path.join(os.path.dirname(ctl.socket_path), f"t-{os.path.basename(ctl.socket_path)}"),
         "fips_control": ctl.socket_path,
         "fips_udp_addr": "127.0.0.1:%d" % udp.getsockname()[1],
         "allow": "any",
@@ -121,6 +123,17 @@ def test_fips_frames_cross_the_tunnel(rig, mdu_override):
             break
     assert tb["dest"] in a.cmd("tunnel_status")["discovered"]
     assert a.cmd("tunnel_status")["discovered"][tb["dest"]]["npub"] == fake_npub("fips-b")
+
+    # The tunnel control socket answers the same status, and can add/remove peers.
+    from rnsfips.tunnel import control_query
+    sock_a = os.path.join(os.path.dirname(rig["ctl_a"].socket_path), "t-ctl-a.sock")
+    st = control_query("status", socket_path=sock_a)
+    assert st["npub"] == fake_npub("fips-a") and st["peers"][0]["up"]
+    assert control_query("add_peer", {"dest": "00" * 16}, socket_path=sock_a) == {"changed": True}
+    assert control_query("remove_peer", {"dest": "00" * 16}, socket_path=sock_a) == {"changed": True}
+    assert control_query("remove_peer", {"dest": "00" * 16}, socket_path=sock_a) == {"changed": False}
+    with pytest.raises(RuntimeError):
+        control_query("bogus", socket_path=sock_a)
 
 
 def test_inbound_link_refused_when_not_allowed(rig):

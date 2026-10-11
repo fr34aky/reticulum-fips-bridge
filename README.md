@@ -138,6 +138,18 @@ packets. FIPS's timers (10 s heartbeats, 30 s link-dead) suit internet-class
 Reticulum paths; LoRa-class paths are experimental, see
 [docs/design.md](docs/design.md#fips-over-reticulum).
 
+## Checking on it
+
+`rnsfips status` shows the three views side by side: the FIPS node (native API
+listeners and flows, loopback tunnel peers, drop counters), the Reticulum FIPS
+interfaces from the running `rnsd`, and the tunnel (per-peer link state, MDU,
+frame counters, discovered tunnels). `--json` gives the raw data.
+
+`rnsfips tunnel-ctl status|announce|add_peer <hash>|remove_peer <hash>` talks
+to the running tunnel over its control socket
+(`$XDG_RUNTIME_DIR/rnsfips/tunnel.sock`, set `control_socket` in `tunnel.conf`
+to move or disable it).
+
 ## Running as services
 
 `rnsfips install-units` writes systemd user units for `rnsd` (with the FIPS
